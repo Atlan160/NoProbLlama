@@ -1,0 +1,10 @@
+# Persönliche Daten: Chats, eigene Pfade und Messwerte, Testbilder
+llama_chats.json
+llama_chats.json.*
+llama_starter_config.json
+llama_starter_config.json.*
+kontext_tests/
+
+# Python
+__pycache__/
+*.pyc
