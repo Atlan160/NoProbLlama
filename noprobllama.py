@@ -22,6 +22,7 @@ from tkinter import filedialog, messagebox, ttk
 
 import llama_plot
 from llama_chat import ChatWindow, http_post_json
+from llama_optimize import OptimizeWindow, repeat_lines
 from llama_options import ALL_OPTS, DEFAULTS, TABS
 
 CONFIG_PATH = Path(__file__).with_name("llama_starter_config.json")
@@ -34,11 +35,11 @@ OPENCODE_DESKTOP_CLI = (Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / 
                         / "resources" / "opencode-cli.exe")
 
 SPEEDTEST_MAX_TOKENS = 2000
-SPEEDTEST_MIN_TOKENS = 1000
+REPEAT_TEST_TOKENS = 1500  # Länge des Texts, den das Modell für die Spekulations-Messung abschreibt.
 PROMPT_TEST_TOKENS = 8000  # Ungefähr der Prompt von OpenCode. Das Tempo hängt von der Länge ab, deshalb immer gleich lang.
 PROMPT_TEST_RESERVE = 256  # So viel Kontext bleibt beim Einlesen frei.
 PROMPT_TEST_MIN_TOKENS = 1000  # Darunter wäre der Wert nicht aussagekräftig.
-SWEEP_ANSWER_SECONDS = 10  # Messzeit der Antwort pro Punkt, ab dem ersten Token. Danach wird abgeschnitten, das Tempo steht dann.
+SWEEP_ANSWER_SECONDS = 10  # Messzeit der Antwort in allen Tests, ab dem ersten Token. Danach wird abgeschnitten, das Tempo steht dann.
 SWEEP_LOAD_TIMEOUT = 300  # Sekunden, die ein Messpunkt zum Laden des Modells bekommt.
 SWEEP_GRID = (8448, 12288, 16384, 24576, 32768, 49152, 65536, 98304, 131072, 196608, 262144)  # Ab 8448 passt der ganze Prompt.
 SWEEP_GRID_DEFAULT_TOP = 65536
@@ -686,6 +687,23 @@ def other_llama_servers(own_pid=None):
     return sum(1 for pid in pids if pid != str(own_pid))
 
 
+def run_repeat_test(url, model_id, api_key, target, cancel, time_limit):
+    """Lässt das Modell einen Text abschreiben, der schon im Prompt steht. Dort kann Spekulation am meisten bringen."""
+    body = {
+        "model": model_id,
+        "messages": [{"role": "user", "content": f"Schreibe den folgenden Code unverändert ab. Gib nur den Code aus.\n\n{repeat_lines(target)}"}],
+        "max_tokens": target,
+        "temperature": 0,
+        "seed": 42,
+        "stream": True,
+        "cache_prompt": False,
+        "timings_per_token": True,
+        "chat_template_kwargs": {"enable_thinking": False},
+    }
+    reply = stream_chat(url, api_key, body, cancel, time_limit=time_limit)
+    return speedtest_result(*reply) if reply else None
+
+
 def run_speedtest(url, model_id, api_key, on_token, cancel, time_limit=None):
     """Lässt das Modell einen Text erzeugen, auf Wunsch nur time_limit Sekunden lang. Liefert die Messwerte, bei Abbruch None."""
     body = {
@@ -870,6 +888,9 @@ class App(tk.Tk):
         self.sweep_current = None
         self.sweep_pending = False
         self.sweep_restart = False
+        self.optimize_window = None
+        self.optimize_pending = False
+        self.optimize_restart = False
         self.sweep_hover = None
         self.speed_buttons = []
         self.model_info = {}
@@ -980,9 +1001,8 @@ class App(tk.Tk):
         ttk.Button(controls, text="Chat", style="Big.TButton", command=self.open_chat).pack(side="left", padx=(16, 0))
         self.web_button = ttk.Button(controls, text="Web-UI öffnen", style="Big.TButton", command=self.open_webui, state="disabled")
         self.web_button.pack(side="left", padx=(6, 0))
-        speed_button = ttk.Button(controls, text="Speedtest", style="Big.TButton", command=self.toggle_speedtest, state="disabled")
-        speed_button.pack(side="left", padx=(6, 0))
-        self.speed_buttons.append(speed_button)
+        self.optimize_button = ttk.Button(controls, text="Modell optimieren", style="Big.TButton", command=self.open_optimizer)
+        self.optimize_button.pack(side="left", padx=(6, 0))
         ttk.Button(controls, text="VRAM prüfen", style="Big.TButton", command=self.show_vram_check).pack(side="left", padx=(6, 0))
         self.status_dot = tk.Label(controls, text="●", fg="#888888", font=("Segoe UI", 13))
         self.status_dot.pack(side="left", padx=(18, 4))
@@ -1044,13 +1064,12 @@ class App(tk.Tk):
 
         head = ttk.Frame(tab)
         head.pack(fill="x")
-        button = ttk.Button(head, text="Speedtest", command=self.toggle_speedtest, state="disabled")
+        button = ttk.Button(head, text="Speedtest starten", style="Big.TButton", command=self.toggle_speedtest, state="disabled")
         button.pack(side="left")
         self.speed_buttons.append(button)
-        self.speed_bar = ttk.Progressbar(head, maximum=SPEEDTEST_MAX_TOKENS, length=150)
+        self.speed_bar =ttk.Progressbar(head, maximum=SWEEP_ANSWER_SECONDS, length=150)
         self.speed_bar.pack(side="left", padx=(10, 0))
-        self.speed_status = tk.StringVar(value=f"Liest {PROMPT_TEST_TOKENS} Tokens ein und erzeugt dann bis zu "
-                                               f"{SPEEDTEST_MAX_TOKENS} Tokens Antwort.")
+        self.speed_status = tk.StringVar(value=f"Liest {PROMPT_TEST_TOKENS} Tokens ein und misst dann {SWEEP_ANSWER_SECONDS} Sekunden lang die Antwort.")
         ttk.Label(head, textvariable=self.speed_status).pack(side="left", padx=(10, 0))
         ttk.Button(head, text="Verlauf leeren", command=self.clear_speedtests).pack(side="right")
 
@@ -1130,6 +1149,7 @@ class App(tk.Tk):
         self._refresh_saved_sweeps()
 
     def _on_tab_changed(self):
+        self.notebook.focus_set()  # Sonst liegt der Fokus auf dem ersten Knopf im Reiter, und schon die Leertaste löst ihn aus.
         # matplotlib lädt erst hier, damit das Programm weiterhin schnell startet.
         if self.notebook.select() == str(self.sweep_tab):
             self._ensure_sweep_canvas()
@@ -1531,6 +1551,8 @@ class App(tk.Tk):
                 self.events.put(lambda message=f"Geräteprüfung fehlgeschlagen: {err}": self.gpu_var.set(message))
                 if self.sweep_pending:
                     self.events.put(self._begin_sweep)
+                if self.optimize_pending:
+                    self.events.put(self._begin_optimizer)
                 return
             devices = [line.strip() for line in (run.stdout + run.stderr).splitlines()
                        if re.match(r"\s+\S+:", line)]
@@ -1546,6 +1568,8 @@ class App(tk.Tk):
         self._schedule_preview()
         if self.sweep_pending:  # Der Kontext-Test hat auf diesen frisch gelesenen Wert gewartet.
             self._begin_sweep()
+        if self.optimize_pending:
+            self._begin_optimizer()
         if devices:
             self.gpu_var.set("GPU: " + "   |   ".join(devices))
             self._style_gpu_banner(warn=False, show_button=False)
@@ -1575,7 +1599,7 @@ class App(tk.Tk):
     # ---------- Serverprozess ----------
 
     def start_server(self):
-        if self.proc or self.sweep_cancel or self.sweep_pending:
+        if self.proc or self.sweep_cancel or self.sweep_pending or self.optimize_pending or self.optimize_window is not None:
             return
         errors = validate(self.values())
         if not self.exe_path().is_file():
@@ -1899,7 +1923,7 @@ class App(tk.Tk):
     def _update_speed_buttons(self):
         """Ein laufender Test lässt sich abbrechen. Ohne Server ist der Button gesperrt."""
         for button in self.speed_buttons:
-            button.configure(text="Abbrechen" if self.speed_cancel else "Speedtest",
+            button.configure(text="Abbrechen" if self.speed_cancel else "Speedtest starten",
                              state="normal" if self.server_ready else "disabled")
 
     def _prompt_test_target(self):
@@ -1951,7 +1975,7 @@ class App(tk.Tk):
                     return
             self.events.put(self._on_answer_phase)
             result = run_speedtest(url, settings["model_id"], settings["api_key"],
-                                   lambda piece: self.events.put(lambda: self._on_speed_token(piece)), cancel)
+                                   lambda piece: self.events.put(lambda: self._on_speed_token(piece)), cancel, SWEEP_ANSWER_SECONDS)
         except (OSError, ValueError, http.client.HTTPException) as err:
             message = "Abgebrochen." if cancel.is_set() else f"Fehlgeschlagen: {err}"
             self.events.put(lambda: self._on_speedtest_done(error=message))
@@ -1971,15 +1995,15 @@ class App(tk.Tk):
     def _on_answer_phase(self):
         if self.speed_cancel is None or self.speed_cancel.is_set():
             return
-        self.speed_bar.configure(value=0, maximum=SPEEDTEST_MAX_TOKENS)
+        self.speed_bar.configure(value=0, maximum=SWEEP_ANSWER_SECONDS)
         self.speed_status.set("Die Antwort wird vorbereitet…")
 
     def _on_speed_token(self, piece):
         now = time.perf_counter()
         self.speed_first = self.speed_first or now
         self.speed_count += 1
-        self.speed_bar.configure(value=self.speed_count)
         elapsed = now - self.speed_first
+        self.speed_bar.configure(value=elapsed)
         if elapsed > 0:
             self.speed_status.set(f"Antwort: {self.speed_count} Tokens   ·   ca. {(self.speed_count - 1) / elapsed:.1f} Tok/s")
         at_end = self.speed_text.yview()[1] >= 0.999
@@ -2015,14 +2039,14 @@ class App(tk.Tk):
             summary = f"Einlesen: {row['prompt_tps']} Tok/s   ·   {summary}"
         else:
             summary += "   ·   Einlesen nicht gemessen, der Kontext ist zu klein."
-        if result["tokens"] < SPEEDTEST_MIN_TOKENS:
-            summary += "   ·   Das Modell hat früh aufgehört, der Wert ist weniger aussagekräftig."
+        if result["finish"] == "stop":
+            summary += "   ·   Das Modell hat vor Ablauf der Messzeit aufgehört, der Wert ist weniger aussagekräftig."
         history = self.config_data.setdefault("speedtests", [])
         history.append(row)
         del history[:-100]
         self._add_speed_row(row)
         self._save_config()
-        self.speed_bar.configure(value=result["tokens"], maximum=SPEEDTEST_MAX_TOKENS)
+        self.speed_bar.configure(value=SWEEP_ANSWER_SECONDS, maximum=SWEEP_ANSWER_SECONDS)
         self.speed_status.set(summary)
 
     def _add_speed_row(self, row):
@@ -2038,6 +2062,103 @@ class App(tk.Tk):
         self.config_data["speedtests"] = []
         self.speed_table.delete(*self.speed_table.get_children())
         self._save_config()
+
+    # ---------- Modell optimieren ----------
+
+    def open_optimizer(self):
+        if self.optimize_window is not None:
+            self.optimize_window.lift()
+            return
+        if self.sweep_cancel or self.sweep_pending or self.optimize_pending or self.speed_cancel:
+            messagebox.showinfo("Modell optimieren", "Es läuft gerade schon ein Test. Warte, bis er fertig ist.")
+            return
+        if self.selected_model() and not self.model_info:  # Die Metadaten werden vielleicht gerade noch im Hintergrund gelesen.
+            try:
+                self._set_model_info(self.selected_model(), read_gguf_info(self.selected_model()))
+            except (OSError, ValueError, struct.error, OverflowError, MemoryError) as err:
+                self._log_app(f"Metadaten nicht lesbar: {err}")
+        errors = validate({**self.values(), "ctx_size": ""})
+        if not self.exe_path().is_file():
+            errors.append(f"llama-server.exe nicht gefunden: {self.exe_path()}")
+        if not self.selected_model() or not self.model_info:
+            errors.append("Kein lesbares Modell ausgewählt.")
+        if errors:
+            messagebox.showerror("Modell optimieren nicht möglich", "\n".join(errors))
+            return
+        others = other_llama_servers(self.proc.pid if self.proc else None)
+        if others and not messagebox.askokcancel(
+                "Modell optimieren", f"Es laufen noch {others} andere llama-server. Sie belegen VRAM und verfälschen die Messung. Trotzdem starten?"):
+            return
+        self.optimize_restart = bool(self.proc)
+        if self.proc:
+            if not messagebox.askokcancel("Modell optimieren", "Der laufende Server wird für die Messungen beendet und danach wieder gestartet."):
+                return
+            self.optimize_pending = True
+            self.optimize_button.configure(state="disabled")
+            self.stop_server()  # Sobald er weg ist und der VRAM neu gelesen wurde, geht es in _set_devices weiter.
+            return
+        self._begin_optimizer()
+
+    def _begin_optimizer(self):
+        self.optimize_pending = False
+        model = self.selected_model()
+        values = self.values()
+        values["spec_type"] = resolve_spec_type(values["spec_type"], self.model_info, self.vram_free, fit_reserve_mib(values["fit_target"]))
+        folder = self.config_path.parent / SWEEP_FOLDER / "optimierung" / f"{re.sub(r'[^\w.-]+', '_', model.stem)}_{time.strftime('%Y-%m-%d_%H-%M-%S')}"
+        self.optimize_button.configure(state="disabled")
+        self.sweep_button.configure(state="disabled")
+        self.start_button.configure(state="disabled")
+        self._set_status("Modell wird optimiert", "#d9a400")
+        self._log_app(f"Modell optimieren: {model.name}. Diagramme und Messwerte: {folder}")
+        self.optimize_window = OptimizeWindow(self, self.exe_path(), model, dict(self.model_info), values, self.vram_free, folder)
+
+    def on_optimizer_closed(self):
+        self.optimize_window = None
+        self.optimize_button.configure(state="normal")
+        self.sweep_button.configure(state="normal")
+        self.start_button.configure(state="normal")
+        self._set_status("Gestoppt", "#888888")
+        self._detect_devices()
+        if self.optimize_restart:
+            self.optimize_restart = False
+            self.start_server()
+
+    def optimize_limit(self, values):
+        return self._sweep_limit(values)
+
+    def optimize_range_default(self, values):
+        """Vorschlag für den Kontext-Bereich: (von, bis, VRAM-Grenze laut Schätzung, Maximum des Modells)."""
+        limit = self._sweep_limit(values)
+        trained = self.model_info.get("context")
+        low = min(SWEEP_GRID[0], trained) if trained else SWEEP_GRID[0]
+        return low, sweep_contexts(limit, trained)[-1], limit, trained
+
+    def optimize_moe_suggestion(self, values, context, free):
+        if free is None:
+            return None
+        return moe_suggestion(self.model_info, free, context, fit_reserve_mib(values.get("fit_target", "")), values.get("cache_k", "").strip(), values.get("cache_v", "").strip())
+
+    @staticmethod
+    def optimize_describe(values):
+        shown = build_args("", "", {key: value for key, value in values.items() if key not in ("ctx_size", "host", "port", "api_key")})
+        return subprocess.list2cmdline(shown[1:])
+
+    @staticmethod
+    def optimize_command(exe, model, values):
+        return subprocess.list2cmdline(build_args(exe, model, values))
+
+    def profile_exists(self, name):
+        return name in self.config_data.get("profiles", {})
+
+    def save_optimized_profile(self, name, values, model):
+        data = dict(values)
+        data["_model"] = str(model)
+        self.config_data.setdefault("profiles", {})[name] = data
+        self._load_values(data)
+        self.refresh_models(str(model))
+        self.profile_var.set(name)
+        self._save_config()
+        self._refresh_profiles()
 
     # ---------- Kontext-Test ----------
 
@@ -2063,6 +2184,8 @@ class App(tk.Tk):
             self.sweep_hint.set("Automatisch: " + ", ".join(llama_plot.compact_tokens(value) for value in plan))
 
     def toggle_sweep(self):
+        if self.optimize_window is not None or self.optimize_pending:
+            return
         if self.sweep_cancel:
             self.sweep_cancel.set()
             self.sweep_status.set("Wird abgebrochen…")
@@ -2156,8 +2279,8 @@ class App(tk.Tk):
             self.events.put(lambda p=point, done=index + 1: self._on_sweep_point(p, done))
         self.events.put(lambda: self._on_sweep_end(cancel.is_set()))
 
-    def _measure_context(self, exe, model, values, requested, cancel, announce):
-        """Startet einen eigenen Server mit dieser Kontextgröße, misst beide Werte und beendet ihn wieder."""
+    def _measure_context(self, exe, model, values, requested, cancel, announce, repeat=False):
+        """Startet einen eigenen Server mit dieser Kontextgröße, misst beide Werte und beendet ihn wieder. repeat misst zusätzlich wiederholten Text."""
         port = free_port()
         url = f"http://127.0.0.1:{port}"
         api_key = values["api_key"].strip()
@@ -2203,6 +2326,14 @@ class App(tk.Tk):
             point.update(tps=round(answer["tps"], 1), tokens=answer["tokens"], state="OK")
             if answer["draft_n"]:
                 point["draft"] = round(100 * answer["draft_accepted"] / answer["draft_n"])
+            if repeat:
+                announce(f"Wiederholter Text wird {SWEEP_ANSWER_SECONDS} s lang gemessen")
+                copied = run_repeat_test(url, "sweep", api_key, min(REPEAT_TEST_TOKENS, (point["ctx"] - PROMPT_TEST_RESERVE) // 2), cancel, SWEEP_ANSWER_SECONDS)
+                if copied is None:
+                    return point
+                point["repeat_tps"] = round(copied["tps"], 1)
+                if copied["draft_n"]:
+                    point["repeat_draft"] = round(100 * copied["draft_accepted"] / copied["draft_n"])
         except (OSError, ValueError, http.client.HTTPException) as err:
             point["error"] = str(err)[:300]
         finally:
@@ -2463,6 +2594,11 @@ class App(tk.Tk):
     def on_close(self):
         if self.speed_cancel:
             self.speed_cancel.set()
+        if self.optimize_window is not None:
+            if not messagebox.askokcancel("Beenden", "Das Optimieren läuft noch. Fertige Messungen und Diagramme bleiben gespeichert."):
+                return
+            self.optimize_restart = False
+            self.optimize_window.close(force=True)
         if self.sweep_cancel:
             if not messagebox.askokcancel("Beenden", "Der Kontext-Test läuft noch. Die fertigen Messpunkte bleiben gespeichert."):
                 return
