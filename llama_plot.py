@@ -65,14 +65,29 @@ def _panel_title(label, series):
     return tr("{label}: {best} → {last} Tok/s (−{value:.0f} %)", label=label, best=format_number(best), last=format_number(last), value=(1 - last / best) * 100)
 
 
-def _draw_panel(axis, label, series, color, marker, failed, compact, connect=True, baseline=None, baseline_color=None):
+def _focus_title(label, series, baseline, focus):
+    """Im Ergebnis zählt der Unterschied bei der gewählten Kontextgröße, nicht der Abfall über den ganzen Bereich."""
+    after = dict(series).get(focus)
+    if after is None:
+        return None
+    before = dict(baseline).get(focus)
+    size = compact_tokens(focus)
+    if not before:
+        return tr("{label} bei {ctx}: {after} Tok/s", label=label, ctx=size, after=format_number(after))
+    change = (after / before - 1) * 100
+    shown = ("+" if change >= 0 else "−") + format_number(abs(change), 0 if abs(change) >= 10 else 1)
+    return tr("{label} bei {ctx}: {before} → {after} Tok/s ({change} %)", label=label, ctx=size, before=format_number(before), after=format_number(after), change=shown)
+
+
+def _draw_panel(axis, label, series, color, marker, failed, compact, connect=True, baseline=None, baseline_color=None, focus=None):
     axis.set_facecolor("none")
     for side in ("top", "right"):
         axis.spines[side].set_visible(False)
     for side in ("left", "bottom"):
         axis.spines[side].set_color(GRID)
     axis.tick_params(colors=TEXT_SECONDARY, length=0, labelsize=8 if compact else 9)
-    axis.set_title(_panel_title(label, series), loc="left", fontsize=9 if compact else 11, color=TEXT_PRIMARY, pad=4 if compact else 6)
+    title = _focus_title(label, series, baseline or [], focus) if focus else None
+    axis.set_title(title or _panel_title(label, series), loc="left", fontsize=9 if compact else 11, color=TEXT_PRIMARY, pad=4 if compact else 6)
     if baseline:  # Die Messung mit den Ausgangswerten liegt gestrichelt darunter, damit der Unterschied bei jeder Kontextgröße sichtbar wird.
         axis.plot(*zip(*baseline), color=baseline_color, marker=marker, linewidth=2, linestyle=(0, (4, 2)), markersize=6, markeredgecolor=SURFACE, markeredgewidth=1.5,
                   clip_on=False, zorder=2, label=tr("Ausgangswerte"))
@@ -120,8 +135,8 @@ def draw_sweep(figure, sweep, compact=False):
         if not sweep.get("complete", True):
             title += tr("   ·   unvollständig")
         figure.suptitle(title, x=0.01, ha="left", fontsize=12, color=TEXT_PRIMARY)
-    _draw_panel(top, tr("Prompt einlesen"), prompt, PROMPT_COLOR, "o", failed, compact, baseline=_measured(baseline, "prompt_tps"), baseline_color=PROMPT_BASELINE_COLOR)
-    _draw_panel(bottom, tr("Antwort erzeugen"), answer, ANSWER_COLOR, "s", failed, compact, baseline=_measured(baseline, "tps"), baseline_color=ANSWER_BASELINE_COLOR)
+    _draw_panel(top, tr("Prompt einlesen"), prompt, PROMPT_COLOR, "o", failed, compact, baseline=_measured(baseline, "prompt_tps"), baseline_color=PROMPT_BASELINE_COLOR, focus=sweep.get("focus"))
+    _draw_panel(bottom, tr("Antwort erzeugen"), answer, ANSWER_COLOR, "s", failed, compact, baseline=_measured(baseline, "tps"), baseline_color=ANSWER_BASELINE_COLOR, focus=sweep.get("focus"))
     top.tick_params(labelbottom=False)
     if not points:
         bottom.set_xticks([])

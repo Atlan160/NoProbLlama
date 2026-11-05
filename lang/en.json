@@ -931,6 +931,8 @@
   "Für dieses Modell gibt es einen gespeicherten Lauf vom {time}. Fortsetzen?\n\nJa: Die gemessenen Schritte bleiben, es geht beim ersten offenen Schritt weiter.\nNein: Neu beginnen.": "There is a saved run for this model from {time}. Continue it?\n\nYes: The measured steps stay, and it continues at the first open step.\nNo: Start over.",
   "Liest bis zu {prompt_test_tokens} Tokens ein, höchstens {prompt_test_seconds} Sekunden lang, und misst dann {sweep_answer_seconds} Sekunden lang die Antwort.": "Reads up to {prompt_test_tokens} tokens for at most {prompt_test_seconds} seconds, then measures the answer for {sweep_answer_seconds} seconds.",
   "Vorher": "Before",
-  "Gewählt": "Chosen"
+  "Gewählt": "Chosen",
+  "{label} bei {ctx}: {after} Tok/s": "{label} at {ctx}: {after} Tok/s",
+  "{label} bei {ctx}: {before} → {after} Tok/s ({change} %)": "{label} at {ctx}: {before} → {after} Tok/s ({change}%)"
  }
 }

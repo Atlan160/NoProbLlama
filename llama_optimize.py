@@ -963,6 +963,8 @@ class OptimizeWindow(tk.Toplevel):
             return
         if key in SWEEP_STEPS:
             self.current["ctx_size"] = point["value"]
+            if key == "result":  # Die Titel der Diagramme nennen den Unterschied bei dieser Größe.
+                step["sweep"]["focus"] = point["ctx"]
             if key == "context":
                 # Ein später gemessenes -ncmoe bleibt, auch wenn der Kontext nachträglich wechselt.
                 if not any(other["key"] == "ncmoe" and other["done"] for other in self.steps):
