@@ -16,10 +16,11 @@ import webbrowser
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
-from llama_plot import german_number
+from llama_lang import tr
+from llama_plot import format_number
 
 BUDGETS = {"low": 512, "medium": 2048, "high": 8192, "max": -1}  # Dieselben Stufen wie in der WebUI.
-EFFORT_LABELS = {"minimal": "Minimal", "low": "Niedrig", "medium": "Mittel", "high": "Hoch", "xhigh": "Sehr hoch", "max": "Maximal"}
+EFFORT_LABELS = {"minimal": tr("Minimal"), "low": tr("Niedrig"), "medium": tr("Mittel"), "high": tr("Hoch"), "xhigh": tr("Sehr hoch"), "max": tr("Maximal")}
 RENDER_INTERVAL = 0.1  # Beim Streamen wird die Antwort höchstens so oft neu gesetzt, in Sekunden.
 MAX_TEXT_FILE = 2 * 1024 * 1024
 IMAGE_TYPES = (".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp")
@@ -39,9 +40,9 @@ METER_TRACK = "#e7e6e1"
 METER_LEVELS = ((85, "#d03b3b"), (60, "#fab219"), (0, "#0ca30c"))  # Ab diesem Anteil in Prozent gilt die Farbe.
 COMPACT_HINT = 70  # Ab diesem Füllstand in Prozent rät das Fenster zum Kompaktieren, solange noch Platz für die Zusammenfassung ist.
 COMPACT_MIN_GAIN = 0.25  # Mindestens dieser Teil des Kontexts muss seit dem letzten Kompaktieren dazugekommen sein.
-COMPACT_PROMPT = ("Fasse unser bisheriges Gespräch so zusammen, dass du es allein damit fortsetzen kannst. Übernimm Ziele, Fakten, Namen, Zahlen, Entscheidungen, Code und offene Punkte, soweit sie im Gespräch vorkommen. "
-                  "Erfinde nichts und lass alles weg, was nicht vorkam, auch ganze Punkte. Schreibe knapp und in der Sprache des Gesprächs. Gib nur die Zusammenfassung aus, ohne Einleitung und ohne Rückfragen.")
-SUMMARY_PREFIX = "Dieses Gespräch wurde kompaktiert. Zusammenfassung des bisherigen Verlaufs:"
+COMPACT_PROMPT = (tr("Fasse unser bisheriges Gespräch so zusammen, dass du es allein damit fortsetzen kannst. Übernimm Ziele, Fakten, Namen, Zahlen, Entscheidungen, Code und offene Punkte, soweit sie im Gespräch vorkommen. "
+                  "Erfinde nichts und lass alles weg, was nicht vorkam, auch ganze Punkte. Schreibe knapp und in der Sprache des Gesprächs. Gib nur die Zusammenfassung aus, ohne Einleitung und ohne Rückfragen."))
+SUMMARY_PREFIX = tr("Dieses Gespräch wurde kompaktiert. Zusammenfassung des bisherigen Verlaufs:")
 
 INLINE = re.compile(
     r"`{1,3}([^`\n]+)`{1,3}"
@@ -233,7 +234,7 @@ def parse_markdown(text):
                     end += 1
             code = "\n".join(code_lines)
             spans.append((f" {fence.group(2) or 'Code'}   ", ("codehead",), None))
-            spans.append(("Kopieren", ("codehead", "link"), ("copy", code)))
+            spans.append((tr("Kopieren"), ("codehead", "link"), ("copy", code)))
             spans.append(("\n", ("codehead",), None))
             spans.append((code + "\n", ("codeblock",), None))
             index = end + 1
@@ -293,12 +294,12 @@ def split_thinking(text):
 
 def reasoning_choices(effort_levels):
     """Auswahl für das Nachdenken: (Beschriftung, Stufe). Kennt die Chatvorlage eigene Stufen, gelten diese."""
-    choices = [("Standard", "default"), ("Aus", "off")]
+    choices = [(tr("Standard"), "default"), (tr("Aus"), "off")]
     known = [level for level in effort_levels if level in EFFORT_LABELS]
     if known:
         return choices + [(EFFORT_LABELS[level], level) for level in known]
     for level, budget in BUDGETS.items():
-        limit = "unbegrenzt" if budget < 0 else f"max. {german_number(budget, 0)} Tokens"
+        limit = tr("unbegrenzt") if budget < 0 else tr("max. {budget} Tokens", budget=format_number(budget, 0))
         choices.append((f"{EFFORT_LABELS[level]} ({limit})", level))
     return choices
 
@@ -351,11 +352,11 @@ def api_messages(chat, end=None, plain=False, think_tag=False):
         images = []
         for attachment in message.get("attachments", []):
             if attachment["kind"] == "image" and plain:
-                text += f"\n\n[Bild {attachment['name']}]"
+                text += tr("\n\n[Bild {name}]", name=attachment['name'])
             elif attachment["kind"] == "image":
                 images.append({"type": "image_url", "image_url": {"url": attachment["data"]}})
             else:
-                text += f"\n\nDatei {attachment['name']}:\n```\n{attachment['text']}\n```"
+                text += tr("\n\nDatei {name}:\n```\n{text}\n```", name=attachment['name'], text=attachment['text'])
         messages.append({"role": "user", "content": images + [{"type": "text", "text": text}] if images else text})
     return messages
 
@@ -372,12 +373,12 @@ def stats_from_timings(timings):
 
 
 def stats_text(stats, context=None):
-    parts = [f"{german_number(stats['tokens'], 0)} Tokens", f"{german_number(stats['tps'])} Tok/s"]
+    parts = [tr("{tokens} Tokens", tokens=format_number(stats['tokens'], 0)), tr("{tps} Tok/s", tps=format_number(stats['tps']))]
     if stats.get("prompt_tokens"):
-        parts.append(f"Prompt {german_number(stats['prompt_tokens'], 0)} Tokens bei {german_number(stats['prompt_tps'], 0)} Tok/s")
+        parts.append(tr("Prompt {prompt_tokens} Tokens bei {prompt_tps} Tok/s", prompt_tokens=format_number(stats['prompt_tokens'], 0), prompt_tps=format_number(stats['prompt_tps'], 0)))
     if stats.get("used"):
-        total = f" von {german_number(context, 0)}" if context else ""
-        parts.append(f"Kontext {german_number(stats['used'], 0)}{total}")
+        total = tr(" von {total}", total=format_number(context, 0)) if context else ""
+        parts.append(tr("Kontext {used}{total}", used=format_number(stats['used'], 0), total=total))
     return "   ·   ".join(parts)
 
 
@@ -426,14 +427,14 @@ def meter_color(percent):
 def meter_text(used, context):
     """Text unter dem Balken. Er nennt den Zustand auch in Worten, damit die Farbe nicht allein steht."""
     if not context:
-        return f"{german_number(used, 0)} Tokens, Kontextgröße unbekannt" if used else "Kontextgröße unbekannt"
+        return tr("{used} Tokens, Kontextgröße unbekannt", used=format_number(used, 0)) if used else tr("Kontextgröße unbekannt")
     percent = 100 * used / context
-    shown = "unter 1" if 0 < percent < 1 else int(percent)  # Abgerundet, damit 100 % erst bei wirklich vollem Kontext erscheint.
-    text = f"{german_number(used, 0)} von {german_number(context, 0)} Tokens ({shown} %)"
+    shown = tr("unter 1") if 0 < percent < 1 else int(percent)  # Abgerundet, damit 100 % erst bei wirklich vollem Kontext erscheint.
+    text = tr("{used} von {context} Tokens ({shown} %)", used=format_number(used, 0), context=format_number(context, 0), shown=shown)
     if used >= context:
-        return f"{text}   ·   voll"
-    text += f"   ·   {german_number(context - used, 0)} frei"
-    return f"{text}   ·   fast voll" if percent >= METER_LEVELS[0][0] else text
+        return tr("{text}   ·   voll", text=text)
+    text += tr("   ·   {value} frei", value=format_number(context - used, 0))
+    return tr("{text}   ·   fast voll", text=text) if percent >= METER_LEVELS[0][0] else text
 
 
 def http_post_json(url, body, api_key="", timeout=600):
@@ -459,8 +460,8 @@ def server_error_text(error):
     except (OSError, ValueError, AttributeError):
         detail = {}
     if detail.get("type") == "exceed_context_size_error":
-        return "Der Chat passt nicht mehr in den Kontext. Kompaktiere ihn, beginne einen neuen Chat oder starte den Server mit größerem Kontext."
-    return detail.get("message") or f"Der Server meldet Fehler {error.code}."
+        return tr("Der Chat passt nicht mehr in den Kontext. Kompaktiere ihn, beginne einen neuen Chat oder starte den Server mit größerem Kontext.")
+    return detail.get("message") or tr("Der Server meldet Fehler {code}.", code=error.code)
 
 
 def stream_reply(url, api_key, body, cancel, emit):
@@ -473,13 +474,13 @@ def stream_reply(url, api_key, body, cancel, emit):
                     return
                 line = raw.decode("utf-8", "replace").strip()
                 if line.startswith("error:"):  # Tritt der Fehler erst im Stream auf, kommt er als eigene Zeile.
-                    emit("error", json.loads(line[6:]).get("message", "Unbekannter Fehler des Servers."))
+                    emit("error", json.loads(line[6:]).get("message", tr("Unbekannter Fehler des Servers.")))
                     return
                 if not line.startswith("data:") or line == "data: [DONE]":
                     continue
                 chunk = json.loads(line[5:])
                 if chunk.get("error"):
-                    emit("error", chunk["error"].get("message", "Unbekannter Fehler des Servers."))
+                    emit("error", chunk["error"].get("message", tr("Unbekannter Fehler des Servers.")))
                     return
                 if chunk.get("prompt_progress"):
                     emit("progress", chunk["prompt_progress"])
@@ -497,7 +498,7 @@ def stream_reply(url, api_key, body, cancel, emit):
     except urllib.error.HTTPError as err:
         emit("error", server_error_text(err))
     except (OSError, ValueError) as err:
-        emit("error", "stopped" if cancel.is_set() else f"Die Verbindung zum Server ist abgebrochen: {err}")
+        emit("error", "stopped" if cancel.is_set() else tr("Die Verbindung zum Server ist abgebrochen: {err}", err=err))
 
 
 def count_tokens(url, api_key, messages):
@@ -528,9 +529,9 @@ def compact_worker(url, api_key, chat, split, context, used_before, cancel, emit
             longest = max(messages[first:], key=lambda message: len(message["content"]), default=None)
             keep = int(len(longest["content"]) * 0.8 * (context - room) / size) // 2 if longest else 0
             if keep < 50:
-                emit("compact_end", {"error": "Schon der System-Prompt füllt den Kontext, so lässt sich der Chat nicht kürzen."})
+                emit("compact_end", {"error": tr("Schon der System-Prompt füllt den Kontext, so lässt sich der Chat nicht kürzen.")})
                 return
-            longest["content"] = f"{longest['content'][:keep]}\n[… gekürzt …]\n{longest['content'][-keep:]}"
+            longest["content"] = tr("{content}\n[… gekürzt …]\n{content2}", content=longest['content'][:keep], content2=longest['content'][-keep:])
             shortened = True
         state = {"text": "", "finish": "", "error": ""}
 
@@ -553,22 +554,22 @@ def compact_worker(url, api_key, chat, split, context, used_before, cancel, emit
         if state["error"]:
             emit("compact_end", {"error": state["error"]})
         elif state["finish"] == "length":
-            emit("compact_end", {"error": "Die Zusammenfassung passte nicht mehr in den Kontext. Der Chat bleibt unverändert."})
+            emit("compact_end", {"error": tr("Die Zusammenfassung passte nicht mehr in den Kontext. Der Chat bleibt unverändert.")})
         elif not summary:
-            emit("compact_end", {"error": "Das Modell hat keine Zusammenfassung geschrieben. Der Chat bleibt unverändert."})
+            emit("compact_end", {"error": tr("Das Modell hat keine Zusammenfassung geschrieben. Der Chat bleibt unverändert.")})
         else:
-            notes = [f"Die ältesten {dropped} Nachrichten passten nicht in den Kontext und fehlen in der Zusammenfassung."] if dropped else []
-            notes += ["Eine lange Nachricht ging nur gekürzt in die Zusammenfassung ein."] if shortened else []
+            notes = [tr("Die ältesten {dropped} Nachrichten passten nicht in den Kontext und fehlen in der Zusammenfassung.", dropped=dropped)] if dropped else []
+            notes += [tr("Eine lange Nachricht ging nur gekürzt in die Zusammenfassung ein.")] if shortened else []
             entry = {"role": "summary", "content": summary, "kept": len(chat["messages"]) - split, "used_before": used_before, "note": " ".join(notes)}
             entry["used"] = count_tokens(url, api_key, api_messages({**chat, "messages": [entry] + chat["messages"][split:]}, plain=True))
             if entry["used"] >= used_before > 0:
-                emit("compact_end", {"error": "Die Zusammenfassung wäre nicht kürzer als der Chat. Der Chat bleibt unverändert."})
+                emit("compact_end", {"error": tr("Die Zusammenfassung wäre nicht kürzer als der Chat. Der Chat bleibt unverändert.")})
             else:
                 emit("compact_end", {"entry": entry, "split": split})
     except urllib.error.HTTPError as err:
         emit("compact_end", {"error": server_error_text(err)})
     except (OSError, ValueError, KeyError) as err:
-        emit("compact_end", {"error": f"Die Verbindung zum Server ist abgebrochen: {err}"})
+        emit("compact_end", {"error": tr("Die Verbindung zum Server ist abgebrochen: {err}", err=err)})
 
 
 def load_store(path):
@@ -600,17 +601,17 @@ def read_attachment(path):
         kind = mimetypes.guess_type(path.name)[0] or "image/png"
         return {"kind": "image", "name": path.name, "data": f"data:{kind};base64,{base64.b64encode(path.read_bytes()).decode('ascii')}"}
     if path.stat().st_size > MAX_TEXT_FILE:
-        raise ValueError(f"{path.name} ist größer als 2 MB und würde den Kontext sprengen.")
+        raise ValueError(tr("{name} ist größer als 2 MB und würde den Kontext sprengen.", name=path.name))
     raw = path.read_bytes()
     if b"\0" in raw[:4096]:
-        raise ValueError(f"{path.name} ist keine Textdatei. Das Chatfenster liest nur Text und Bilder.")
+        raise ValueError(tr("{name} ist keine Textdatei. Das Chatfenster liest nur Text und Bilder.", name=path.name))
     return {"kind": "text", "name": path.name, "text": raw.decode("utf-8", "replace")}
 
 
 class ChatWindow(tk.Toplevel):
     def __init__(self, parent, store_path):
         super().__init__(parent)
-        self.title("Chat")
+        self.title(tr("Chat"))
         self.geometry("1040x760")
         self.minsize(640, 420)
         self.store_path = store_path
@@ -654,12 +655,12 @@ class ChatWindow(tk.Toplevel):
         side = ttk.Frame(self, padding=8)
         side.grid(row=0, column=0, sticky="ns")
         side.rowconfigure(1, weight=1)
-        ttk.Button(side, text="Neuer Chat", command=self.new_chat).grid(row=0, column=0, sticky="ew")
+        ttk.Button(side, text=tr("Neuer Chat"), command=self.new_chat).grid(row=0, column=0, sticky="ew")
         self.chat_list = tk.Listbox(side, width=28, activestyle="none", exportselection=False, relief="flat", highlightthickness=0, bg=SOFT, fg=INK,
                                     selectbackground="#d9d8d3", selectforeground=INK, font=("Segoe UI", 9))
         self.chat_list.grid(row=1, column=0, sticky="ns", pady=6)
         self.chat_list.bind("<<ListboxSelect>>", lambda _: self._on_pick())
-        ttk.Button(side, text="Chat löschen", command=self.delete_chat).grid(row=2, column=0, sticky="ew")
+        ttk.Button(side, text=tr("Chat löschen"), command=self.delete_chat).grid(row=2, column=0, sticky="ew")
 
         main = ttk.Frame(self, padding=(0, 8, 8, 8))
         main.grid(row=0, column=1, sticky="nsew")
@@ -675,7 +676,7 @@ class ChatWindow(tk.Toplevel):
         self.meter.bind("<Configure>", lambda _: self._draw_meter())
         meter_row = ttk.Frame(top)
         meter_row.grid(row=2, column=0, sticky="ew", pady=(3, 0))
-        self.compact_button = ttk.Button(meter_row, text="Kompaktieren", command=self.compact_chat)
+        self.compact_button = ttk.Button(meter_row, text=tr("Kompaktieren"), command=self.compact_chat)
         self.compact_button.pack(side="right")
         self.meter_var = tk.StringVar()
         ttk.Label(meter_row, textvariable=self.meter_var).pack(side="left")
@@ -730,14 +731,14 @@ class ChatWindow(tk.Toplevel):
 
         bar = ttk.Frame(main)
         bar.grid(row=2, column=0, columnspan=2, sticky="ew")
-        ttk.Button(bar, text="+ Datei", command=self.add_attachment).pack(side="left")
-        ttk.Button(bar, text="System-Prompt", command=self.edit_system).pack(side="left", padx=(6, 0))
-        ttk.Label(bar, text="Nachdenken").pack(side="left", padx=(14, 4))
+        ttk.Button(bar, text=tr("+ Datei"), command=self.add_attachment).pack(side="left")
+        ttk.Button(bar, text=tr("System-Prompt"), command=self.edit_system).pack(side="left", padx=(6, 0))
+        ttk.Label(bar, text=tr("Nachdenken")).pack(side="left", padx=(14, 4))
         self.reasoning_var = tk.StringVar()
         self.reasoning_box = ttk.Combobox(bar, textvariable=self.reasoning_var, state="readonly", width=26)
         self.reasoning_box.pack(side="left")
         self.reasoning_box.bind("<<ComboboxSelected>>", lambda _: self._on_reasoning())
-        ttk.Label(bar, text="Schrift").pack(side="left", padx=(14, 4))
+        ttk.Label(bar, text=tr("Schrift")).pack(side="left", padx=(14, 4))
         ttk.Button(bar, text="−", width=2, command=lambda: self.change_font_size(-1)).pack(side="left")
         self.size_var = tk.StringVar(value=str(self._font_size()))
         ttk.Label(bar, textvariable=self.size_var, width=3, anchor="center").pack(side="left")
@@ -746,9 +747,9 @@ class ChatWindow(tk.Toplevel):
             widget.bind("<Control-MouseWheel>", lambda event: self.change_font_size(1 if event.delta > 0 else -1))
         for sequence, step in (("<Control-plus>", 1), ("<Control-equal>", 1), ("<Control-KP_Add>", 1), ("<Control-minus>", -1), ("<Control-KP_Subtract>", -1), ("<Control-Key-0>", 0)):
             self.bind(sequence, lambda _event, change=step: self.change_font_size(change))
-        self.send_button = ttk.Button(bar, text="Senden", command=self.toggle_send)
+        self.send_button = ttk.Button(bar, text=tr("Senden"), command=self.toggle_send)
         self.send_button.pack(side="right")
-        ttk.Label(bar, text="Umschalt+Enter: neue Zeile", foreground=MUTED).pack(side="right", padx=(0, 10))
+        ttk.Label(bar, text=tr("Umschalt+Enter: neue Zeile"), foreground=MUTED).pack(side="right", padx=(0, 10))
         self._fill_reasoning()
         self.input.focus_set()
 
@@ -855,11 +856,11 @@ class ChatWindow(tk.Toplevel):
 
     def _update_controls(self):
         streaming = self.cancel is not None
-        self.send_button.configure(text="Stopp" if streaming else "Senden", state="normal" if streaming or self.url else "disabled")
+        self.send_button.configure(text=tr("Stopp") if streaming else tr("Senden"), state="normal" if streaming or self.url else "disabled")
         if self.url:
-            self.head_var.set(self._model_name() or "Modell")
+            self.head_var.set(self._model_name() or tr("Modell"))
         else:
-            self.head_var.set("Kein Server aktiv. Starte ihn in NoProbLlama, die Chats bleiben hier lesbar.")
+            self.head_var.set(tr("Kein Server aktiv. Starte ihn in NoProbLlama, die Chats bleiben hier lesbar."))
         self._draw_meter()
 
     def _messages(self):
@@ -882,7 +883,7 @@ class ChatWindow(tk.Toplevel):
             self.meter.create_rectangle(0, 0, max(2, width * min(percent, 100) / 100), self.meter.winfo_height(), fill=meter_color(percent), width=0)
         idle = self.cancel is None
         worthwhile = idle and self.url and compact_worthwhile(self._messages(), context)
-        self.hint_var.set(("Kompaktieren macht wieder Platz" if used >= context else "Kompaktieren lohnt sich jetzt") if worthwhile else "")
+        self.hint_var.set((tr("Kompaktieren macht wieder Platz") if used >= context else tr("Kompaktieren lohnt sich jetzt")) if worthwhile else "")
         self.compact_button.configure(state="normal" if idle and self.url and context and can_compact(self._messages()) else "disabled")
 
     # ---------- Chats ----------
@@ -890,7 +891,7 @@ class ChatWindow(tk.Toplevel):
     def _refresh_list(self):
         self.chat_list.delete(0, "end")
         for chat in reversed(self.store["chats"]):
-            self.chat_list.insert("end", chat.get("title") or "Neuer Chat")
+            self.chat_list.insert("end", chat.get("title") or tr("Neuer Chat"))
         self._mark_current()
 
     def _mark_current(self):
@@ -907,7 +908,7 @@ class ChatWindow(tk.Toplevel):
     def new_chat(self):
         # Ein noch leerer Chat wird weiterverwendet, statt die Liste zu füllen.
         empty = next((chat for chat in self.store["chats"] if not chat["messages"]), None)
-        chat = empty or {"id": uuid.uuid4().hex, "title": "", "created": time.strftime("%d.%m.%Y %H:%M"), "system": (self.chat or {}).get("system", ""), "messages": []}
+        chat = empty or {"id": uuid.uuid4().hex, "title": "", "created": time.strftime(tr("%d.%m.%Y %H:%M")), "system": (self.chat or {}).get("system", ""), "messages": []}
         if not empty:
             self.store["chats"].append(chat)
         self.show_chat(chat)
@@ -918,7 +919,7 @@ class ChatWindow(tk.Toplevel):
         chat = self.chat
         if not chat:
             return
-        if chat["messages"] and not messagebox.askokcancel("Chat löschen", f"„{chat.get('title') or 'Neuer Chat'}“ wird endgültig gelöscht.", parent=self):
+        if chat["messages"] and not messagebox.askokcancel(tr("Chat löschen"), tr("„{value}“ wird endgültig gelöscht.", value=chat.get('title') or tr('Neuer Chat')), parent=self):
             return
         if chat is self.stream_chat and self.cancel:
             self.cancel.set()
@@ -941,7 +942,7 @@ class ChatWindow(tk.Toplevel):
         try:
             save_store(self.store_path, self.store)
         except OSError as err:
-            self.status_var.set(f"Chats nicht gespeichert: {err}")
+            self.status_var.set(tr("Chats nicht gespeichert: {err}", err=err))
 
     # ---------- Darstellung ----------
 
@@ -995,40 +996,40 @@ class ChatWindow(tk.Toplevel):
 
         if message["role"] == "summary":
             is_open = self.thought_state.get(id(message), False)
-            put("───   Kompaktiert: Das Modell kennt alles darüber nur noch als Zusammenfassung   ───\n", ("summary",))
-            put(f"{'▾' if is_open else '▸'} Zusammenfassung ({german_number(len(message['content']), 0)} Zeichen)\n", ("toggle", "link"), lambda: self._toggle_thought(index, not is_open))
+            put(tr("───   Kompaktiert: Das Modell kennt alles darüber nur noch als Zusammenfassung   ───\n"), ("summary",))
+            put(tr("{value} Zusammenfassung ({count} Zeichen)\n", value='▾' if is_open else '▸', count=format_number(len(message['content']), 0)), ("toggle", "link"), lambda: self._toggle_thought(index, not is_open))
             if is_open:
                 put(message["content"].rstrip() + "\n", ("thought",))
             if message.get("note"):
                 put(f"{message['note']}\n", ("note",))
-            put(f"Kontext {german_number(message.get('used_before', 0), 0)} → {german_number(message.get('used', 0), 0)} Tokens   ·   ", ("footer",))
-            put("Kopieren", ("footer", "link"), lambda: self._copy(message["content"]))
+            put(tr("Kontext {get} → {get2} Tokens   ·   ", get=format_number(message.get('used_before', 0), 0), get2=format_number(message.get('used', 0), 0)), ("footer",))
+            put(tr("Kopieren"), ("footer", "link"), lambda: self._copy(message["content"]))
             if self.cancel is None and index == last_summary(self.chat["messages"]):
                 put("   ·   ", ("footer",))
-                put("Rückgängig", ("footer", "link"), lambda: self.undo_compact(index))
+                put(tr("Rückgängig"), ("footer", "link"), lambda: self.undo_compact(index))
             return
 
         if message["role"] == "user":
-            put("Du\n", ("user_role",))
+            put(tr("Du\n"), ("user_role",))
             for attachment in message.get("attachments", []):
-                label = "Bild" if attachment["kind"] == "image" else "Datei"
+                label = tr("Bild") if attachment["kind"] == "image" else tr("Datei")
                 put(f"[{label}] {attachment['name']}\n", ("attachment", "user"))
             put(message.get("content", "") or " ", ("user",))
             put("\n")
-            put("Kopieren", ("user_footer", "link"), lambda: self._copy(message.get("content", "")))
+            put(tr("Kopieren"), ("user_footer", "link"), lambda: self._copy(message.get("content", "")))
             if self.cancel is None:
                 put("   ·   ", ("user_footer",))
-                put("Bearbeiten", ("user_footer", "link"), lambda: self.edit_message(index))
+                put(tr("Bearbeiten"), ("user_footer", "link"), lambda: self.edit_message(index))
             return
 
         streaming = message is self.stream_message
-        put(f"{message.get('model') or 'Modell'}\n", ("role",))
+        put(f"{message.get('model') or tr('Modell')}\n", ("role",))
         reasoning = message.get("reasoning", "")
         if reasoning:
             state = self.thought_state.get(id(message))
             is_open = state if state is not None else (streaming and not message.get("content"))
             arrow = "▾" if is_open else "▸"
-            put(f"{arrow} Gedanken ({german_number(len(reasoning), 0)} Zeichen)\n", ("toggle", "link"), lambda: self._toggle_thought(index, not is_open))
+            put(tr("{arrow} Gedanken ({count} Zeichen)\n", arrow=arrow, count=format_number(len(reasoning), 0)), ("toggle", "link"), lambda: self._toggle_thought(index, not is_open))
             if is_open:
                 put(reasoning.rstrip() + "\n", ("thought",))
         for content, tags, action in parse_markdown(message.get("content", "")):
@@ -1045,10 +1046,10 @@ class ChatWindow(tk.Toplevel):
         put("\n")
         if message.get("stats"):
             put(stats_text(message["stats"], self._context()) + "   ·   ", ("footer",))
-        put("Kopieren", ("footer", "link"), lambda: self._copy(message.get("content", "")))
+        put(tr("Kopieren"), ("footer", "link"), lambda: self._copy(message.get("content", "")))
         if self.cancel is None and index == len(self.chat["messages"]) - 1:
             put("   ·   ", ("footer",))
-            put("Neu erzeugen", ("footer", "link"), self.regenerate)
+            put(tr("Neu erzeugen"), ("footer", "link"), self.regenerate)
 
     def _at_bottom(self):
         # yview schätzt bei langen Absätzen nur, die Lage der letzten Zeile ist dagegen genau.
@@ -1079,7 +1080,7 @@ class ChatWindow(tk.Toplevel):
     def _copy(self, content):
         self.clipboard_clear()
         self.clipboard_append(content)
-        self.status_var.set("In die Zwischenablage kopiert.")
+        self.status_var.set(tr("In die Zwischenablage kopiert."))
 
     # ---------- Eingabe ----------
 
@@ -1095,20 +1096,20 @@ class ChatWindow(tk.Toplevel):
             self._save()
 
     def add_attachment(self):
-        paths = filedialog.askopenfilenames(parent=self, title="Dateien anhängen")
+        paths = filedialog.askopenfilenames(parent=self, title=tr("Dateien anhängen"))
         for path in paths:
             try:
                 attachment = read_attachment(path)
                 if attachment["kind"] == "image" and self.url and not self._supports_images():
-                    raise ValueError("Dieses Modell liest keine Bilder. Dafür braucht der Server ein passendes Modell mit --mmproj.")
+                    raise ValueError(tr("Dieses Modell liest keine Bilder. Dafür braucht der Server ein passendes Modell mit --mmproj."))
                 self.pending.append(attachment)
             except (OSError, ValueError) as err:
-                messagebox.showerror("Datei nicht angehängt", str(err), parent=self)
+                messagebox.showerror(tr("Datei nicht angehängt"), str(err), parent=self)
         self._show_attachments()
 
     def _show_attachments(self):
         names = ", ".join(attachment["name"] for attachment in self.pending)
-        self.attachment_var.set(f"Angehängt: {names}   (zum Entfernen klicken)" if names else "")
+        self.attachment_var.set(tr("Angehängt: {names}   (zum Entfernen klicken)", names=names) if names else "")
 
     def _clear_attachments(self):
         self.pending = []
@@ -1117,10 +1118,10 @@ class ChatWindow(tk.Toplevel):
     def edit_system(self):
         chat = self.chat
         dialog = tk.Toplevel(self)
-        dialog.title("System-Prompt")
+        dialog.title(tr("System-Prompt"))
         dialog.transient(self)
         dialog.geometry("560x320")
-        ttk.Label(dialog, text="Gilt für diesen Chat und für neue Chats, die du von hier aus beginnst.", foreground=MUTED).pack(anchor="w", padx=10, pady=(10, 4))
+        ttk.Label(dialog, text=tr("Gilt für diesen Chat und für neue Chats, die du von hier aus beginnst."), foreground=MUTED).pack(anchor="w", padx=10, pady=(10, 4))
         field = tk.Text(dialog, wrap="word", font=("Segoe UI", 10), height=8)
         field.pack(fill="both", expand=True, padx=10)
         field.insert("1.0", chat.get("system", ""))
@@ -1130,13 +1131,13 @@ class ChatWindow(tk.Toplevel):
             self._save()
             dialog.destroy()
 
-        ttk.Button(dialog, text="Übernehmen", command=store).pack(anchor="e", padx=10, pady=10)
+        ttk.Button(dialog, text=tr("Übernehmen"), command=store).pack(anchor="e", padx=10, pady=10)
         field.focus_set()
 
     def toggle_send(self):
         if self.cancel:
             self.cancel.set()
-            self.status_var.set("Wird gestoppt…")
+            self.status_var.set(tr("Wird gestoppt…"))
             return
         content = self.input.get("1.0", "end-1c").strip()
         if not self.url or not (content or self.pending):
@@ -1172,7 +1173,7 @@ class ChatWindow(tk.Toplevel):
             return
         messages = self.chat["messages"]
         later = len(messages) - index - 1
-        if later > 1 and not messagebox.askokcancel("Nachricht bearbeiten", f"Die {later} Nachrichten danach werden entfernt.", parent=self):
+        if later > 1 and not messagebox.askokcancel(tr("Nachricht bearbeiten"), tr("Die {later} Nachrichten danach werden entfernt.", later=later), parent=self):
             return
         message = messages[index]
         del messages[index:]
@@ -1193,7 +1194,7 @@ class ChatWindow(tk.Toplevel):
         chat = self.chat
         self.stream_chat = chat  # Wie bei einer Antwort: Stopp bricht ab, Löschen des Chats ebenso, die Aktionen sind gesperrt.
         self.cancel = threading.Event()
-        self.status_var.set("Das Modell fasst den Chat zusammen…")
+        self.status_var.set(tr("Das Modell fasst den Chat zusammen…"))
         self.render_chat()
         self._update_controls()
         emit = lambda kind, value, inbox=self.events: inbox.put((kind, value))
@@ -1203,17 +1204,17 @@ class ChatWindow(tk.Toplevel):
         chat = self.stream_chat
         self.stream_chat = None
         self.cancel = None
-        status = "Abgebrochen. Der Chat bleibt unverändert." if result.get("stopped") else result.get("error", "")
+        status = tr("Abgebrochen. Der Chat bleibt unverändert.") if result.get("stopped") else result.get("error", "")
         if chat is not None and result.get("entry"):
             chat["messages"].insert(result["split"], result["entry"])
             self._save()
-            status = f"Kompaktiert: {german_number(result['entry']['used_before'], 0)} → {german_number(result['entry']['used'], 0)} Tokens."
+            status = tr("Kompaktiert: {used_before} → {used} Tokens.", used_before=format_number(result['entry']['used_before'], 0), used=format_number(result['entry']['used'], 0))
         if chat is self.chat:
             self.render_chat()
         self.status_var.set(status)
         self._update_controls()
         if result.get("error"):
-            messagebox.showerror("Kompaktieren", result["error"], parent=self)
+            messagebox.showerror(tr("Kompaktieren"), result["error"], parent=self)
         self.input.focus_set()
 
     def undo_compact(self, index):
@@ -1241,7 +1242,7 @@ class ChatWindow(tk.Toplevel):
         self.stream_prompt = 0
         self.cancel = threading.Event()
         self.finish_reason = ""
-        self.status_var.set("Wartet auf das Modell…")
+        self.status_var.set(tr("Wartet auf das Modell…"))
         self.render_chat()  # Die Aktionen der älteren Nachrichten sind während der Antwort gesperrt.
         self._update_controls()
         emit = lambda kind, value, inbox=self.events: inbox.put((kind, value))
@@ -1271,7 +1272,7 @@ class ChatWindow(tk.Toplevel):
             self._update_controls()
             return
         if kind == "compact_tokens":
-            self.status_var.set(f"Das Modell fasst den Chat zusammen: {german_number(value, 0)} Tokens…")
+            self.status_var.set(tr("Das Modell fasst den Chat zusammen: {value} Tokens…", value=format_number(value, 0)))
             return
         if kind == "compact_end":
             self._end_compact(value)
@@ -1293,7 +1294,7 @@ class ChatWindow(tk.Toplevel):
             self.stream_prompt = total
             self._draw_meter()
             if total and not reply["content"] and not reply["reasoning"]:
-                self.status_var.set(f"Prompt wird eingelesen: {100 * value.get('processed', 0) // total} %")
+                self.status_var.set(tr("Prompt wird eingelesen: {value} %", value=100 * value.get('processed', 0) // total))
         elif kind == "timings":
             reply["stats"] = stats_from_timings(value)
             self._draw_meter()
@@ -1316,7 +1317,7 @@ class ChatWindow(tk.Toplevel):
             self._update_controls()
             self._save()
             return
-        status = "Gestoppt." if stopped else "Fertig."
+        status = tr("Gestoppt.") if stopped else tr("Fertig.")
         if not reply["content"] and not reply["reasoning"]:
             # Ohne Antwort bleibt nichts im Verlauf. Der Text kommt zurück ins Eingabefeld, damit er nicht verloren geht.
             chat["messages"].pop()
@@ -1326,17 +1327,17 @@ class ChatWindow(tk.Toplevel):
                 self.pending = list(question.get("attachments", []))
                 self._show_attachments()
             if error:
-                messagebox.showerror("Chat", error, parent=self)
+                messagebox.showerror(tr("Chat"), error, parent=self)
             status = error or status
         elif error:
             reply["note"] = error
             status = error
         elif stopped:
-            reply["note"] = "Gestoppt."
+            reply["note"] = tr("Gestoppt.")
         elif self.finish_reason == "length":
-            reply["note"] = "Die Antwort ist abgeschnitten, weil der Kontext voll ist."
+            reply["note"] = tr("Die Antwort ist abgeschnitten, weil der Kontext voll ist.")
             status = reply["note"]
-        if reply.get("stats") and status == "Fertig.":
+        if reply.get("stats") and status == tr("Fertig."):
             status = stats_text(reply["stats"], self._context())
         self._save()
         if chat is self.chat:

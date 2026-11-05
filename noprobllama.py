@@ -10,6 +10,7 @@ import shlex
 import socket
 import struct
 import subprocess
+import sys
 import threading
 import time
 import tkinter as tk
@@ -20,12 +21,14 @@ from collections import deque
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
+import llama_lang
 import llama_plot
+from llama_lang import tr
 from llama_chat import ChatWindow, http_post_json
 from llama_optimize import OptimizeWindow, repeat_lines
 from llama_options import ALL_OPTS, DEFAULTS, TABS
 
-CONFIG_PATH = Path(__file__).with_name("llama_starter_config.json")
+CONFIG_PATH = llama_lang.CONFIG_PATH
 ICON_PATH = Path(__file__).with_name("noprobllama.ico")
 DEFAULT_LLAMA_DIR = r"C:\Program Files\LLama.cpp"
 DEFAULT_MODELS_DIR = str(Path.home() / "Documents" / "KI Modelle")
@@ -39,6 +42,8 @@ REPEAT_TEST_TOKENS = 1500  # Länge des Texts, den das Modell für die Spekulati
 PROMPT_TEST_TOKENS = 8000  # Ungefähr der Prompt von OpenCode. Das Tempo hängt von der Länge ab, deshalb immer gleich lang.
 PROMPT_TEST_RESERVE = 256  # So viel Kontext bleibt beim Einlesen frei.
 PROMPT_TEST_MIN_TOKENS = 1000  # Darunter wäre der Wert nicht aussagekräftig.
+PROMPT_TEST_SECONDS = 10  # Länger wird nicht eingelesen. Bei überlaufendem VRAM bräuchte der ganze Prompt sonst über eine Minute pro Messpunkt.
+PROMPT_IDLE_TIMEOUT = 60  # So lange darf der Server nach dem Abbruch noch am Prompt rechnen, bevor die Antwort gemessen wird.
 SWEEP_ANSWER_SECONDS = 10  # Messzeit der Antwort in allen Tests, ab dem ersten Token. Danach wird abgeschnitten, das Tempo steht dann.
 SWEEP_LOAD_TIMEOUT = 300  # Sekunden, die ein Messpunkt zum Laden des Modells bekommt.
 SWEEP_GRID = (8448, 12288, 16384, 24576, 32768, 49152, 65536, 98304, 131072, 196608, 262144)  # Ab 8448 passt der ganze Prompt.
@@ -84,10 +89,10 @@ VRAM_QUERY = (
 )
 VRAM_KIND_ORDER = {"ai": 0, "app": 1, "own": 2, "system": 3}
 VRAM_KIND_TEXT = {
-    "ai": "Anderer KI-Server: beenden, wenn du ihn nicht brauchst",
-    "app": "Programm: Schließen gibt den Speicher frei",
-    "own": "Dein Server aus NoProbLlama",
-    "system": "Windows: bleibt belegt",
+    "ai": tr("Anderer KI-Server: beenden, wenn du ihn nicht brauchst"),
+    "app": tr("Programm: Schließen gibt den Speicher frei"),
+    "own": tr("Dein Server aus NoProbLlama"),
+    "system": tr("Windows: bleibt belegt"),
 }
 VRAM_AI_PROGRAMS = {"llama-server", "ollama", "ollama app", "ollama_llama_server", "lm studio", "koboldcpp", "text-generation-webui"}
 VRAM_SYSTEM_PROGRAMS = {
@@ -99,7 +104,7 @@ MOE_KEYS = ("cpu_moe", "n_cpu_moe", "moe_cache")
 CONTEXT_TABLE = (8192, 16384, 32768, 40000, 65536, 131072, 262144)
 MTP_MAX_GPU_SHARE = 0.75  # Qwen3.8 Q4 (63 % im VRAM) gewann mit MTP, Qwen3.8 IQ3 (100 %) verlor.
 METER_COLORS = ("#9a9a9a", "#7aa7d9", "#2f7ad1", "#0f4fa8")
-METER_NAMES = ("keine Wirkung", "geringe Wirkung", "mittlere Wirkung", "große Wirkung")
+METER_NAMES = (tr("keine Wirkung"), tr("geringe Wirkung"), tr("mittlere Wirkung"), tr("große Wirkung"))
 METER_PADDING = (0, 12)
 
 
@@ -175,13 +180,13 @@ def validate(values):
         if not val:
             continue
         if opt.pattern and not re.fullmatch(opt.pattern, val):
-            errors.append(f"{opt.label} ({opt.flag}): ungültiger Wert „{val}“")
+            errors.append(tr("{label} ({flag}): ungültiger Wert „{val}“", label=opt.label, flag=opt.flag, val=val))
         if opt.kind == "file" and not Path(val).is_file():
-            errors.append(f"{opt.label} ({opt.flag}): Datei nicht gefunden")
+            errors.append(tr("{label} ({flag}): Datei nicht gefunden", label=opt.label, flag=opt.flag))
     try:
         split_extra(values.get("extra", ""))
     except ValueError:
-        errors.append("Weitere Argumente: Anführungszeichen nicht geschlossen")
+        errors.append(tr("Weitere Argumente: Anführungszeichen nicht geschlossen"))
     return errors
 
 
@@ -199,13 +204,13 @@ class GgufReader:
         size = struct.calcsize(fmt)
         data = self.file.read(size)
         if len(data) < size:
-            raise ValueError("Die Datei ist beschädigt oder unvollständig.")
+            raise ValueError(tr("Die Datei ist beschädigt oder unvollständig."))
         return struct.unpack(fmt, data)[0]
 
     def count(self, fmt="<Q"):
         value = self.read(fmt)
         if value > self.size:
-            raise ValueError("Die Datei ist beschädigt oder unvollständig.")
+            raise ValueError(tr("Die Datei ist beschädigt oder unvollständig."))
         return value
 
     def text(self):
@@ -217,7 +222,7 @@ class GgufReader:
         if kind == 8:
             return self.text()
         if kind != 9:
-            raise ValueError(f"Unbekannter GGUF-Datentyp {kind}.")
+            raise ValueError(tr("Unbekannter GGUF-Datentyp {kind}.", kind=kind))
         item_kind, items = self.read("<I"), self.count()
         if item_kind in self.SCALARS:
             item_format = self.SCALARS[item_kind]
@@ -232,10 +237,10 @@ class GgufReader:
     def header(self):
         """Liefert (Metadaten, Anzahl Tensoren)."""
         if self.file.read(4) != b"GGUF":
-            raise ValueError("Keine GGUF-Datei.")
+            raise ValueError(tr("Keine GGUF-Datei."))
         version = self.read("<I")
         if version not in (2, 3):
-            raise ValueError(f"GGUF-Version {version} wird nicht unterstützt.")
+            raise ValueError(tr("GGUF-Version {version} wird nicht unterstützt.", version=version))
         tensor_count, key_count = self.count(), self.count()
         meta = {}
         for _ in range(key_count):
@@ -250,7 +255,7 @@ class GgufReader:
             name = self.text()
             dimensions = self.read("<I")
             if dimensions > 16:
-                raise ValueError("Die Datei ist beschädigt oder unvollständig.")
+                raise ValueError(tr("Die Datei ist beschädigt oder unvollständig."))
             self.file.seek(8 * dimensions + 4, 1)
             found.append((self.read("<Q"), name))
         return sorted(found)
@@ -325,7 +330,7 @@ def read_gguf_info(path):
             alignment = whole_number(part_meta.get("general.alignment")) or 32
             data_size = size - (file.tell() + alignment - 1) // alignment * alignment
         if data_size < 0 or (tensors and tensors[-1][0] > data_size):
-            raise ValueError("Die Datei ist unvollständig. Lade sie bitte erneut herunter.")
+            raise ValueError(tr("Die Datei ist unvollständig. Lade sie bitte erneut herunter."))
         total_bytes += data_size
         # Die Größe eines Tensors ergibt sich aus dem Abstand zum nächsten.
         for index, (offset, name) in enumerate(tensors):
@@ -496,38 +501,38 @@ def estimate_vram(info, values, free_mib, spec_type=""):
 
 
 def format_mib(value):
-    return f"{value:,.0f}".replace(",", ".")
+    return llama_plot.format_number(value, 0)
 
 
 def vram_estimate_text(est):
     """Liefert (Text, Stufe) für die Anzeige. Stufe: ok, tight, over oder info."""
     if est["no_gpu"]:
-        return "VRAM-Schätzung: Das Modell läuft auf der CPU und braucht keinen VRAM.", "info"
-    rough = "" if est["kv_exact"] else " (grob, die Datei nennt nicht alle Werte)"
-    parts = [f"Modell {format_mib(est['weights'])}", f"Kontext {format_mib(est['kv'])}{rough}"]
+        return tr("VRAM-Schätzung: Das Modell läuft auf der CPU und braucht keinen VRAM."), "info"
+    rough = "" if est["kv_exact"] else tr(" (grob, die Datei nennt nicht alle Werte)")
+    parts = [tr("Modell {weights}", weights=format_mib(est['weights'])), tr("Kontext {kv}{rough}", kv=format_mib(est['kv']), rough=rough)]
     if est["buffer"] or est["extra"]:
-        parts.append(f"Zusatz {format_mib(est['buffer'] + est['extra'])}")
-    head = f"VRAM-Schätzung: {' + '.join(parts)} = {format_mib(est['needed'])} MiB"
+        parts.append(tr("Zusatz {value}", value=format_mib(est['buffer'] + est['extra'])))
+    head = tr("VRAM-Schätzung: {join} = {needed} MiB", join=' + '.join(parts), needed=format_mib(est['needed']))
     if est["auto_context"]:
-        head += f"   (--fit wählt etwa {format_mib(est['context'])} Tokens Kontext)"
+        head += tr("   (--fit wählt etwa {context} Tokens Kontext)", context=format_mib(est['context']))
     if est["usable"] is None:
-        return head + ". Der freie VRAM ist nicht bekannt.", "info"
-    head += f", nutzbar {format_mib(est['usable'])} MiB"
+        return head + tr(". Der freie VRAM ist nicht bekannt."), "info"
+    head += tr(", nutzbar {usable} MiB", usable=format_mib(est['usable']))
     limit = ""
     if est["max_context"] and not est["auto_context"]:
-        limit = f" Alles passt bis etwa {format_mib(est['max_context'])} Tokens Kontext."
+        limit = tr(" Alles passt bis etwa {max_context} Tokens Kontext.", max_context=format_mib(est['max_context']))
     if not est["over"]:
         spare = est["usable"] - est["needed"]
         if spare < VRAM_TIGHT_MIB:
-            return f"{head}\nPasst knapp, die Schätzung kann bis zu {VRAM_TIGHT_MIB} MiB daneben liegen.{limit}", "tight"
-        return f"{head}\nPasst, etwa {format_mib(spare)} MiB bleiben frei.{limit}", "ok"
+            return tr("{head}\nPasst knapp, die Schätzung kann bis zu {vram_tight_mib} MiB daneben liegen.{limit}", head=head, vram_tight_mib=VRAM_TIGHT_MIB, limit=limit), "tight"
+        return tr("{head}\nPasst, etwa {spare} MiB bleiben frei.{limit}", head=head, spare=format_mib(spare), limit=limit), "ok"
     if est["fit_blocked"]:
-        effect = "Der VRAM läuft über, das Tempo bricht dann stark ein."
+        effect = tr("Der VRAM läuft über, das Tempo bricht dann stark ein.")
     else:
-        effect = f"--fit lagert etwa {est['over_share'] * 100:.0f} % des Modells in den RAM aus, das bremst deutlich."
+        effect = tr("--fit lagert etwa {value:.0f} % des Modells in den RAM aus, das bremst deutlich.", value=est['over_share'] * 100)
     if not est["max_context"]:
-        limit = " Das Modell passt auch mit sehr kleinem Kontext nicht ganz in den VRAM."
-    return f"{head}\n{format_mib(est['over'])} MiB zu viel. {effect}{limit}", "over"
+        limit = tr(" Das Modell passt auch mit sehr kleinem Kontext nicht ganz in den VRAM.")
+    return tr("{head}\n{over} MiB zu viel. {effect}{limit}", head=head, over=format_mib(est['over']), effect=effect, limit=limit), "over"
 
 
 def moe_suggestion(info, free_mib, context, reserve_mib=FIT_RESERVE_MIB, cache_k="", cache_v=""):
@@ -564,7 +569,7 @@ def merge_opencode_config(config, base_url, model_id, name, context, api_key="")
     providers = config["provider"] = dict(config.get("provider", {}))
     provider = providers[OPENCODE_PROVIDER] = dict(providers.get(OPENCODE_PROVIDER, {}))
     provider["npm"] = "@ai-sdk/openai-compatible"
-    provider["name"] = "llama.cpp (lokal)"
+    provider["name"] = tr("llama.cpp (lokal)")
     options = provider["options"] = dict(provider.get("options", {}))
     options["baseURL"] = base_url
     if api_key:
@@ -585,7 +590,7 @@ def merge_opencode_config(config, base_url, model_id, name, context, api_key="")
 def speedtest_result(timings, first_token, total, finish_reason):
     """Fasst die Messwerte des Servers für die Ergebnisliste zusammen."""
     if not timings.get("predicted_n"):
-        raise ValueError("Der Server hat keine Messwerte geliefert.")
+        raise ValueError(tr("Der Server hat keine Messwerte geliefert."))
     return {
         "tokens": timings["predicted_n"],
         "tps": timings.get("predicted_per_second", 0),
@@ -616,8 +621,9 @@ def stream_chat(url, api_key, body, cancel, on_token=None, on_progress=None, tim
                 continue
             chunk = json.loads(line[5:])
             timings = chunk.get("timings") or timings
-            if on_progress and chunk.get("prompt_progress"):
-                on_progress(chunk["prompt_progress"])
+            if on_progress and chunk.get("prompt_progress") and on_progress(chunk["prompt_progress"]):
+                finish_reason = "prompt_time"
+                break  # on_progress hat genug gesehen. Das Schließen der Verbindung beendet die Rechnung im Server.
             for choice in chunk.get("choices", []):
                 delta = choice.get("delta") or {}
                 piece = delta.get("content") or delta.get("reasoning_content")
@@ -652,10 +658,10 @@ def parse_contexts(text):
     for item in re.split(r"[,;\s]+", text.strip()):
         match = re.fullmatch(r"(\d+)([kK]?)", item)
         if not match:
-            raise ValueError(f"„{item}“ ist keine Kontextgröße.")
+            raise ValueError(tr("„{item}“ ist keine Kontextgröße.", item=item))
         value = int(match.group(1)) * (1024 if match.group(2) else 1)
         if value < 1024:
-            raise ValueError(f"{value} ist zu klein, das Minimum ist 1024.")
+            raise ValueError(tr("{value} ist zu klein, das Minimum ist 1024.", value=value))
         values.add(value)
     return sorted(values)
 
@@ -729,8 +735,27 @@ def build_prompt_text(target, tokenize):
     return text[:int(len(text) * target / count)] if count > target else text
 
 
-def run_prompt_test(url, model_id, api_key, target, on_progress, cancel):
-    """Lässt das Modell einen langen Prompt einlesen. Liefert die Messwerte, bei Abbruch None."""
+def wait_until_idle(url, api_key, timeout=PROMPT_IDLE_TIMEOUT):
+    """Wartet, bis kein Slot mehr rechnet. Sonst liefe die nächste Messung neben dem abgebrochenen Prompt her."""
+    end = time.perf_counter() + timeout
+    while time.perf_counter() < end:
+        status, body = http_get(f"{url}/slots", api_key, timeout=5)
+        if status != 200:
+            return status is not None  # Ohne Slots-Endpunkt lässt sich das nicht prüfen.
+        try:
+            if not any(slot.get("is_processing") for slot in json.loads(body)):
+                return True
+        except (ValueError, AttributeError):
+            return True
+        time.sleep(0.3)
+    return False
+
+
+def run_prompt_test(url, model_id, api_key, target, on_progress, cancel, time_limit=PROMPT_TEST_SECONDS):
+    """Lässt das Modell einen langen Prompt einlesen. Liefert die Messwerte, bei Abbruch None.
+
+    Nach time_limit Sekunden endet das Einlesen. Das Tempo stammt dann aus dem Fortschritt zwischen der ersten und der letzten Meldung,
+    so zählt das Anlaufen der Anfrage nicht mit. Ist der Prompt vorher fertig, gelten die genauen Zeiten des Servers."""
     def tokenize(text):
         try:
             with http_post_json(f"{url}/tokenize", {"content": text}, api_key, timeout=60) as response:
@@ -750,12 +775,25 @@ def run_prompt_test(url, model_id, api_key, target, on_progress, cancel):
         "return_progress": True,
         "chat_template_kwargs": {"enable_thinking": False},
     }
-    reply = stream_chat(url, api_key, body, cancel, on_progress=on_progress)
+    marks = []
+    started = time.perf_counter()
+
+    def progress(data):
+        on_progress(data)
+        done = data.get("processed", 0) - data.get("cache", 0)
+        marks.append((time.perf_counter(), done))
+        return bool(time_limit) and len(marks) >= 2 and marks[-1][1] > marks[0][1] and marks[-1][0] - started >= time_limit and done < data.get("total", 0)
+
+    reply = stream_chat(url, api_key, body, cancel, on_progress=progress)
     if not reply:
         return None
-    timings, _, total, _ = reply
+    timings, _, total, finish = reply
+    if finish == "prompt_time":
+        (first_time, first_done), (last_time, last_done) = marks[0], marks[-1]
+        wait_until_idle(url, api_key)
+        return {"tokens": last_done, "prompt_tps": (last_done - first_done) / (last_time - first_time), "total": total, "partial": True}
     if not timings.get("prompt_n"):
-        raise ValueError("Der Server hat keine Messwerte geliefert.")
+        raise ValueError(tr("Der Server hat keine Messwerte geliefert."))
     return {"tokens": timings["prompt_n"], "prompt_tps": timings.get("prompt_per_second", 0), "total": total}
 
 
@@ -785,7 +823,7 @@ def summarize_vram(snapshot, own_pid=None):
         if adapter and not process["key"].endswith(adapter["name"]):
             continue
         pid = process["key"].split("_")[1]
-        name = process.get("name") or f"Beendet (PID {pid})"
+        name = process.get("name") or tr("Beendet (PID {pid})", pid=pid)
         lowered = name.lower()
         if own_pid is not None and pid == str(own_pid):
             kind = "own"
@@ -873,6 +911,7 @@ class App(tk.Tk):
         self.geometry("1180x940")
         self.minsize(1060, 720)
         self.config_path = config_path
+        self.closed = False
         self.config_data = self._load_config()
         self.events = queue.Queue()
         self.proc = None
@@ -913,11 +952,11 @@ class App(tk.Tk):
         self.models_dir = tk.StringVar(value=settings.get("models_dir", DEFAULT_MODELS_DIR))
         self.model_var = tk.StringVar()
         self.profile_var = tk.StringVar()
-        self.status_var = tk.StringVar(value="Gestoppt")
+        self.status_var = tk.StringVar(value=tr("Gestoppt"))
         self.info_var = tk.StringVar()
         self.warn_var = tk.StringVar()
         self.vram_estimate_var = tk.StringVar()
-        self.gpu_var =tk.StringVar(value="Geräte werden geprüft…")
+        self.gpu_var =tk.StringVar(value=tr("Geräte werden geprüft…"))
 
         self._build_ui()
         current = self.config_data.get("current", DEFAULTS)
@@ -953,57 +992,63 @@ class App(tk.Tk):
         top.pack(fill="x")
         top.columnconfigure(1, weight=1)
 
-        ttk.Label(top, text="llama.cpp-Ordner").grid(row=0, column=0, sticky="w", padx=(0, 6))
+        ttk.Label(top, text=tr("llama.cpp-Ordner")).grid(row=0, column=0, sticky="w", padx=(0, 6))
         ttk.Entry(top, textvariable=self.llama_dir).grid(row=0, column=1, sticky="ew", pady=2)
-        ttk.Button(top, text="Ordner…", command=lambda: self._pick_dir(self.llama_dir, self._detect_devices)).grid(
+        ttk.Button(top, text=tr("Ordner…"), command=lambda: self._pick_dir(self.llama_dir, self._detect_devices)).grid(
             row=0, column=2, padx=(6, 0))
 
-        ttk.Label(top, text="Modell-Ordner").grid(row=1, column=0, sticky="w", padx=(0, 6))
+        ttk.Label(top, text=tr("Modell-Ordner")).grid(row=1, column=0, sticky="w", padx=(0, 6))
         ttk.Entry(top, textvariable=self.models_dir).grid(row=1, column=1, sticky="ew", pady=2)
-        ttk.Button(top, text="Ordner…", command=lambda: self._pick_dir(self.models_dir, self.refresh_models)).grid(
+        ttk.Button(top, text=tr("Ordner…"), command=lambda: self._pick_dir(self.models_dir, self.refresh_models)).grid(
             row=1, column=2, padx=(6, 0))
 
-        ttk.Label(top, text="Modell").grid(row=2, column=0, sticky="w", padx=(0, 6))
+        ttk.Label(top, text=tr("Modell")).grid(row=2, column=0, sticky="w", padx=(0, 6))
         self.model_box = ttk.Combobox(top, textvariable=self.model_var, state="readonly")
         self.model_box.grid(row=2, column=1, sticky="ew", pady=2)
         self.model_box.bind("<<ComboboxSelected>>", lambda _: self._on_model_change())
-        ttk.Button(top, text="Neu einlesen", command=self.refresh_models).grid(row=2, column=2, padx=(6, 0))
+        ttk.Button(top, text=tr("Neu einlesen"), command=self.refresh_models).grid(row=2, column=2, padx=(6, 0))
 
         ttk.Label(top, textvariable=self.info_var, style="Hint.TLabel").grid(
             row=3, column=1, columnspan=2, sticky="w")
         self.vram_estimate_label = ttk.Label(top, textvariable=self.vram_estimate_var, justify="left")
         self.vram_estimate_label.grid(row=4, column=1, columnspan=2, sticky="w")
 
-        ttk.Label(top, text="Profil").grid(row=5, column=0, sticky="w", padx=(0, 6))
+        ttk.Label(top, text=tr("Profil")).grid(row=5, column=0, sticky="w", padx=(0, 6))
         row = ttk.Frame(top)
         row.grid(row=5, column=1, columnspan=2, sticky="ew", pady=2)
         self.profile_box = ttk.Combobox(row, textvariable=self.profile_var, width=32)
         self.profile_box.pack(side="left")
         self.profile_box.bind("<<ComboboxSelected>>", lambda _: self.load_profile())
-        ttk.Button(row, text="Speichern", command=self.save_profile).pack(side="left", padx=(6, 0))
-        ttk.Button(row, text="Löschen", command=self.delete_profile).pack(side="left", padx=(6, 0))
-        ttk.Button(row, text="Alles zurücksetzen", command=self.reset_values).pack(side="left", padx=(6, 0))
+        ttk.Button(row, text=tr("Speichern"), command=self.save_profile).pack(side="left", padx=(6, 0))
+        ttk.Button(row, text=tr("Löschen"), command=self.delete_profile).pack(side="left", padx=(6, 0))
+        ttk.Button(row, text=tr("Alles zurücksetzen"), command=self.reset_values).pack(side="left", padx=(6, 0))
+        self.language_names = llama_lang.available()
+        self.language_var = tk.StringVar(value=self.language_names[llama_lang.current])
+        language_box = ttk.Combobox(row, textvariable=self.language_var, values=list(self.language_names.values()), state="readonly", width=10)
+        language_box.pack(side="right")
+        language_box.bind("<<ComboboxSelected>>", lambda _: self._change_language())
+        ttk.Label(row, text="Sprache / Language").pack(side="right", padx=(0, 6))  # Absichtlich zweisprachig, damit man sie in jeder Sprache findet.
 
         self.gpu_frame = tk.Frame(self, background="#eef3f8")
         self.gpu_frame.pack(fill="x", padx=10, pady=(2, 4))
         self.gpu_label = tk.Label(self.gpu_frame, textvariable=self.gpu_var, background="#eef3f8",
                                   anchor="w", justify="left", padx=8, pady=4)
         self.gpu_label.pack(side="left", fill="x", expand=True)
-        self.gpu_button = ttk.Button(self.gpu_frame, text="CUDA-Paket im Browser öffnen",
+        self.gpu_button = ttk.Button(self.gpu_frame, text=tr("CUDA-Paket im Browser öffnen"),
                                      command=self._open_release_page)
 
         controls = ttk.Frame(self, padding=(10, 6))
         controls.pack(side="top", fill="x")
-        self.start_button = ColorButton(controls, "#1f8a3d", "#17702f", text="▶  Start", command=self.start_server)
+        self.start_button = ColorButton(controls, "#1f8a3d", "#17702f", text=tr("▶  Start"), command=self.start_server)
         self.start_button.pack(side="left", fill="y")
-        self.stop_button = ColorButton(controls, "#c0392b", "#a32d21", text="■  Stop", command=self.stop_server, state="disabled")
+        self.stop_button = ColorButton(controls, "#c0392b", "#a32d21", text=tr("■  Stop"), command=self.stop_server, state="disabled")
         self.stop_button.pack(side="left", fill="y", padx=(6, 0))
-        ttk.Button(controls, text="Chat", style="Big.TButton", command=self.open_chat).pack(side="left", padx=(16, 0))
-        self.web_button = ttk.Button(controls, text="Web-UI öffnen", style="Big.TButton", command=self.open_webui, state="disabled")
+        ttk.Button(controls, text=tr("Chat"), style="Big.TButton", command=self.open_chat).pack(side="left", padx=(16, 0))
+        self.web_button = ttk.Button(controls, text=tr("Web-UI öffnen"), style="Big.TButton", command=self.open_webui, state="disabled")
         self.web_button.pack(side="left", padx=(6, 0))
-        self.optimize_button = ttk.Button(controls, text="Modell optimieren", style="Big.TButton", command=self.open_optimizer)
+        self.optimize_button = ttk.Button(controls, text=tr("Modell optimieren"), style="Big.TButton", command=self.open_optimizer)
         self.optimize_button.pack(side="left", padx=(6, 0))
-        ttk.Button(controls, text="VRAM prüfen", style="Big.TButton", command=self.show_vram_check).pack(side="left", padx=(6, 0))
+        ttk.Button(controls, text=tr("VRAM prüfen"), style="Big.TButton", command=self.show_vram_check).pack(side="left", padx=(6, 0))
         self.status_dot = tk.Label(controls, text="●", fg="#888888", font=("Segoe UI", 13))
         self.status_dot.pack(side="left", padx=(18, 4))
         ttk.Label(controls, textvariable=self.status_var).pack(side="left")
@@ -1014,8 +1059,8 @@ class App(tk.Tk):
         upper = ttk.Frame(panes)
         panes.add(upper, weight=4)
         ttk.Label(upper, style="Hint.TLabel", text=(
-            "Wirkung:  ●●● groß   ●●○ mittel   ●○○ gering   ○○○ keine   ·   Die wirkungsvollsten Einstellungen stehen oben   ·   "
-            "Richtwerte, die Wirkung hängt von Modell und Hardware ab")).pack(anchor="w", pady=(0, 3))
+            tr("Wirkung:  ●●● groß   ●●○ mittel   ●○○ gering   ○○○ keine   ·   Die wirkungsvollsten Einstellungen stehen oben   ·   "
+            "Richtwerte, die Wirkung hängt von Modell und Hardware ab"))).pack(anchor="w", pady=(0, 3))
         self.notebook = notebook = ttk.Notebook(upper)
         notebook.pack(fill="both", expand=True)
         for title, opts in TABS.items():
@@ -1032,8 +1077,8 @@ class App(tk.Tk):
         preview.pack(side="bottom", fill="x", pady=(6, 0), before=notebook)
         head = ttk.Frame(preview)
         head.pack(fill="x")
-        ttk.Label(head, text="Befehl (leere Felder nutzen den llama.cpp-Standard)").pack(side="left")
-        ttk.Button(head, text="Kopieren", command=self.copy_command).pack(side="right")
+        ttk.Label(head, text=tr("Befehl (leere Felder nutzen den llama.cpp-Standard)")).pack(side="left")
+        ttk.Button(head, text=tr("Kopieren"), command=self.copy_command).pack(side="right")
         self.preview = tk.Text(preview, height=3, wrap="word", font=("Consolas", 9), state="disabled",
                                background="#f4f4f4", relief="flat", padx=6, pady=4)
         self.preview.pack(fill="x", pady=(3, 0))
@@ -1044,8 +1089,8 @@ class App(tk.Tk):
         panes.add(lower, weight=1)
         head = ttk.Frame(lower)
         head.pack(fill="x")
-        ttk.Label(head, text="Server-Log").pack(side="left")
-        ttk.Button(head, text="Leeren", command=self.clear_log).pack(side="right")
+        ttk.Label(head, text=tr("Server-Log")).pack(side="left")
+        ttk.Button(head, text=tr("Leeren"), command=self.clear_log).pack(side="right")
         body = ttk.Frame(lower)
         body.pack(fill="both", expand=True, pady=(3, 0))
         self.log = tk.Text(body, wrap="none", font=("Consolas", 9), state="disabled", height=6,
@@ -1060,24 +1105,24 @@ class App(tk.Tk):
 
     def _build_speed_tab(self, notebook):
         self.speed_tab = tab = ttk.Frame(notebook, padding=8)
-        notebook.add(tab, text="Speedtest")
+        notebook.add(tab, text=tr("Speedtest"))
 
         head = ttk.Frame(tab)
         head.pack(fill="x")
-        button = ttk.Button(head, text="Speedtest starten", style="Big.TButton", command=self.toggle_speedtest, state="disabled")
+        button = ttk.Button(head, text=tr("Speedtest starten"), style="Big.TButton", command=self.toggle_speedtest, state="disabled")
         button.pack(side="left")
         self.speed_buttons.append(button)
         self.speed_bar =ttk.Progressbar(head, maximum=SWEEP_ANSWER_SECONDS, length=150)
         self.speed_bar.pack(side="left", padx=(10, 0))
-        self.speed_status = tk.StringVar(value=f"Liest {PROMPT_TEST_TOKENS} Tokens ein und misst dann {SWEEP_ANSWER_SECONDS} Sekunden lang die Antwort.")
+        self.speed_status = tk.StringVar(value=tr("Liest bis zu {prompt_test_tokens} Tokens ein, höchstens {prompt_test_seconds} Sekunden lang, und misst dann {sweep_answer_seconds} Sekunden lang die Antwort.", prompt_test_tokens=PROMPT_TEST_TOKENS, prompt_test_seconds=PROMPT_TEST_SECONDS, sweep_answer_seconds=SWEEP_ANSWER_SECONDS))
         ttk.Label(head, textvariable=self.speed_status).pack(side="left", padx=(10, 0))
-        ttk.Button(head, text="Verlauf leeren", command=self.clear_speedtests).pack(side="right")
+        ttk.Button(head, text=tr("Verlauf leeren"), command=self.clear_speedtests).pack(side="right")
 
         columns = {
-            "time": ("Zeit", 85), "model": ("Modell", 170), "ctx": ("Kontext", 60), "ngl": ("GPU-Layer", 65),
-            "spec": ("Speculative", 125), "ubatch": ("Micro-Batch", 75), "prompt_tokens": ("Prompt-Tokens", 95),
-            "prompt_tps": ("Prompt Tok/s", 80), "tokens": ("Tokens", 50), "tps": ("Tok/s", 50), "first": ("1. Token (s)", 70),
-            "total": ("Dauer (s)", 60), "draft": ("Draft-Quote", 70),
+            "time": (tr("Zeit"), 85), "model": (tr("Modell"), 170), "ctx": (tr("Kontext"), 60), "ngl": (tr("GPU-Layer"), 65),
+            "spec": (tr("Speculative"), 125), "ubatch": (tr("Micro-Batch"), 75), "prompt_tokens": (tr("Prompt-Tokens"), 95),
+            "prompt_tps": (tr("Prompt Tok/s"), 80), "tokens": (tr("Tokens"), 50), "tps": ("Tok/s", 50), "first": (tr("1. Token (s)"), 70),
+            "total": (tr("Dauer (s)"), 60), "draft": (tr("Draft-Quote"), 70),
         }
         table = ttk.Frame(tab)
         table.pack(fill="both", expand=True, pady=(6, 0))
@@ -1099,13 +1144,13 @@ class App(tk.Tk):
 
     def _build_sweep_tab(self, notebook):
         self.sweep_tab = tab = ttk.Frame(notebook, padding=8)
-        notebook.add(tab, text="Kontext-Test")
+        notebook.add(tab, text=tr("Kontext-Test"))
 
         head = ttk.Frame(tab)
         head.pack(fill="x")
-        self.sweep_button = ttk.Button(head, text="Kontext-Test starten", command=self.toggle_sweep)
+        self.sweep_button = ttk.Button(head, text=tr("Kontext-Test starten"), command=self.toggle_sweep)
         self.sweep_button.pack(side="left")
-        ttk.Label(head, text="Kontexte").pack(side="left", padx=(12, 4))
+        ttk.Label(head, text=tr("Kontexte")).pack(side="left", padx=(12, 4))
         self.sweep_contexts_var = tk.StringVar()
         self.sweep_contexts_var.trace_add("write", lambda *_: self._schedule_preview())
         ttk.Entry(head, textvariable=self.sweep_contexts_var, width=30).pack(side="left")
@@ -1116,23 +1161,23 @@ class App(tk.Tk):
         status.pack(fill="x", pady=(6, 0))
         self.sweep_bar = ttk.Progressbar(status, length=150)
         self.sweep_bar.pack(side="left")
-        self.sweep_status = tk.StringVar(value="Startet das Modell pro Messpunkt neu. Das dauert, die Ergebnisse bleiben aber gespeichert.")
+        self.sweep_status = tk.StringVar(value=tr("Startet das Modell pro Messpunkt neu. Das dauert, die Ergebnisse bleiben aber gespeichert."))
         ttk.Label(status, textvariable=self.sweep_status).pack(side="left", padx=(10, 0))
 
         saved = ttk.Frame(tab)
         saved.pack(fill="x", pady=(6, 0))
-        ttk.Label(saved, text="Gespeichert").pack(side="left", padx=(0, 4))
+        ttk.Label(saved, text=tr("Gespeichert")).pack(side="left", padx=(0, 4))
         self.sweep_choice = tk.StringVar()
         self.sweep_box = ttk.Combobox(saved, textvariable=self.sweep_choice, state="readonly", width=70)
         self.sweep_box.pack(side="left")
         self.sweep_box.bind("<<ComboboxSelected>>", lambda _: self._show_saved_sweep())
-        ttk.Button(saved, text="Bild öffnen", command=self.open_sweep_image).pack(side="left", padx=(6, 0))
-        ttk.Button(saved, text="Löschen", command=self.delete_sweep).pack(side="left", padx=(6, 0))
+        ttk.Button(saved, text=tr("Bild öffnen"), command=self.open_sweep_image).pack(side="left", padx=(6, 0))
+        ttk.Button(saved, text=tr("Löschen"), command=self.delete_sweep).pack(side="left", padx=(6, 0))
 
         body = ttk.Frame(tab)
         body.pack(fill="both", expand=True, pady=(6, 0))
-        columns = {"ctx": ("Kontext", 62), "prompt_tps": ("Prompt Tok/s", 90), "tps": ("Tok/s", 48), "vram": ("VRAM MiB", 72),
-                   "state": ("Status", 54)}
+        columns = {"ctx": (tr("Kontext"), 62), "prompt_tps": (tr("Prompt Tok/s"), 90), "tps": ("Tok/s", 48), "vram": (tr("VRAM MiB"), 72),
+                   "state": (tr("Status"), 54)}
         table = ttk.Frame(body)
         table.pack(side="right", fill="y", padx=(8, 0))
         self.sweep_table = ttk.Treeview(table, columns=list(columns), show="headings", height=6)
@@ -1157,7 +1202,7 @@ class App(tk.Tk):
 
     def _build_tab(self, parent, opts):
         parent.columnconfigure(6, weight=1)
-        for column, title in enumerate(("Einstellung", "Wert", "Parameter", "Tempo", "Qualität", "Speicher", "Was es bringt")):
+        for column, title in enumerate((tr("Einstellung"), tr("Wert"), tr("Parameter"), tr("Tempo"), tr("Qualität"), tr("Speicher"), tr("Was es bringt"))):
             ttk.Label(parent, text=title, style="Head.TLabel").grid(
                 row=0, column=column, sticky="w", padx=METER_PADDING if 3 <= column <= 5 else (0, 10), pady=(0, 4))
         hints = []
@@ -1170,7 +1215,7 @@ class App(tk.Tk):
             for column, level in zip((3, 4, 5), (opt.speed, opt.quality, opt.memory)):
                 ttk.Label(parent, text=meter_text(level), style=f"Meter{level}.TLabel").grid(
                     row=row, column=column, sticky="w", padx=METER_PADDING)
-            hint = opt.hint + (f" Standard: {opt.default}." if opt.default else "")
+            hint = opt.hint + (tr(" Standard: {default}.", default=opt.default) if opt.default else "")
             label = ttk.Label(parent, text=hint, style="Hint.TLabel", wraplength=340)
             label.grid(row=row, column=6, sticky="w")
             hints.append(label)
@@ -1191,7 +1236,7 @@ class App(tk.Tk):
         """Zeigt die ausführliche Erklärung. Das Fenster bleibt offen und wechselt nur den Inhalt."""
         if self.help_window is None or not self.help_window.winfo_exists():
             self.help_window = tk.Toplevel(self)
-            self.help_window.title("Parameter-Hilfe")
+            self.help_window.title(tr("Parameter-Hilfe"))
             self.help_window.geometry(f"560x520+{self.winfo_rootx() + 80}+{self.winfo_rooty() + 80}")
             self.help_window.transient(self)
             self.help_window.bind("<Escape>", lambda _: self.help_window.destroy())
@@ -1199,7 +1244,7 @@ class App(tk.Tk):
                                      font=("Segoe UI", 10), spacing2=2)
             bar = ttk.Scrollbar(self.help_window, orient="vertical", command=self.help_text.yview)
             self.help_text.configure(yscrollcommand=bar.set)
-            self.help_apply = ttk.Button(self.help_window, text="Vorschlag übernehmen", command=self.apply_moe_suggestion)
+            self.help_apply = ttk.Button(self.help_window, text=tr("Vorschlag übernehmen"), command=self.apply_moe_suggestion)
             bar.pack(side="right", fill="y")
             self.help_text.pack(fill="both", expand=True)
             self.help_text.tag_configure("title", font=("Segoe UI", 14, "bold"))
@@ -1214,32 +1259,32 @@ class App(tk.Tk):
         if opt.flag:
             flags = f"{opt.flag}   /   {opt.off_flag}" if opt.off_flag else opt.flag
             text.insert("end", flags + "\n", "flag")
-        text.insert("end", "\nWas es tut\n", "head")
+        text.insert("end", tr("\nWas es tut\n"), "head")
         text.insert("end", opt.what + "\n")
         if opt.key == "ctx_size":
-            text.insert("end", "\nVRAM-Bedarf für dieses Modell\n", "head")
+            text.insert("end", tr("\nVRAM-Bedarf für dieses Modell\n"), "head")
             text.insert("end", self._context_table() + "\n")
         if opt.key in MOE_KEYS:
-            text.insert("end", "\nWas du für dieses Modell eintragen solltest\n", "head")
+            text.insert("end", tr("\nWas du für dieses Modell eintragen solltest\n"), "head")
             text.insert("end", self._moe_advice() + "\n")
-        sections = (("Tempo", opt.speed, opt.speed_note), ("Qualität", opt.quality, opt.quality_note),
-                    ("Speicher", opt.memory, opt.memory_note))
+        sections = ((tr("Tempo"), opt.speed, opt.speed_note), (tr("Qualität"), opt.quality, opt.quality_note),
+                    (tr("Speicher"), opt.memory, opt.memory_note))
         for title, level, note in sections:
             text.insert("end", f"\n{title}   ", "head")
             text.insert("end", f"{meter_text(level)}  {METER_NAMES[level]}\n", f"meter{level}")
-            text.insert("end", (note or "Kein spürbarer Einfluss.") + "\n")
+            text.insert("end", (note or tr("Kein spürbarer Einfluss.")) + "\n")
         if opt.tip:
-            text.insert("end", "\nEmpfehlung\n", "head")
+            text.insert("end", tr("\nEmpfehlung\n"), "head")
             text.insert("end", opt.tip + "\n")
         if opt.default:
-            text.insert("end", "\nStandard\n", "head")
+            text.insert("end", tr("\nStandard\n"), "head")
             text.insert("end", opt.default + "\n")
         text.configure(state="disabled")
         text.yview_moveto(0)
         suggestion = self._moe_suggestion()
         if opt.key in MOE_KEYS and suggestion and suggestion["on_gpu"]:
-            label = f"Vorschlag übernehmen: -ngl all und -ncmoe {suggestion['n_cpu_moe']}" if suggestion["n_cpu_moe"] \
-                else "Vorschlag übernehmen: -ngl all"
+            label = tr("Vorschlag übernehmen: -ngl all und -ncmoe {n_cpu_moe}", n_cpu_moe=suggestion['n_cpu_moe']) if suggestion["n_cpu_moe"] \
+                else tr("Vorschlag übernehmen: -ngl all")
             self.help_apply.configure(text=label)
             self.help_apply.pack(side="bottom", pady=8, before=text)
         else:
@@ -1305,13 +1350,13 @@ class App(tk.Tk):
         match = next((label for label, p in self.model_paths.items() if str(p) == previous), None)
         self.model_var.set(match or (labels[0] if labels else ""))
         if mmprojs and not self.vars["mmproj"].get():
-            self._log_app(f"Multimodal-Projektor gefunden, auswählbar unter „Chat & Server“: {mmprojs[0]}")
+            self._log_app(tr("Multimodal-Projektor gefunden, auswählbar unter „Chat & Server“: {mmprojs}", mmprojs=mmprojs[0]))
         self._on_model_change()
 
     def _on_model_change(self):
         path = self.selected_model()
         self.model_info = {}
-        self.info_var.set("Metadaten werden gelesen…" if path else "Keine GGUF-Datei im Modell-Ordner gefunden.")
+        self.info_var.set(tr("Metadaten werden gelesen…") if path else tr("Keine GGUF-Datei im Modell-Ordner gefunden."))
         self._schedule_preview()
         if not path:
             return
@@ -1320,7 +1365,7 @@ class App(tk.Tk):
             try:
                 info = read_gguf_info(path)
             except (OSError, ValueError, struct.error, OverflowError, MemoryError) as err:
-                self.events.put(lambda message=f"Metadaten nicht lesbar: {err}": self.info_var.set(message))
+                self.events.put(lambda message=tr("Metadaten nicht lesbar: {err}", err=err): self.info_var.set(message))
                 return
             self.events.put(lambda: self._set_model_info(path, info))
 
@@ -1333,13 +1378,13 @@ class App(tk.Tk):
         self._apply_model_rules(info)
         parts = [info["name"], info["arch"], info["size_label"]]
         if info["context"]:
-            parts.append(f"max. Kontext {info['context']:,}".replace(",", "."))
-        parts.append("MTP: ja" if info["mtp_layers"] else "MTP: nein")
+            parts.append(tr("max. Kontext {context}", context=format_mib(info['context'])))
+        parts.append(tr("MTP: ja") if info["mtp_layers"] else tr("MTP: nein"))
         if info["experts_used"]:
-            parts.append(f"MoE: {info['experts_used']} von {info['experts']} Experten aktiv")
+            parts.append(tr("MoE: {experts_used} von {experts} Experten aktiv", experts_used=info['experts_used'], experts=info['experts']))
         else:
-            parts.append("MoE: ja" if info["experts"] else "MoE: nein")
-        parts.append("Tool-Aufrufe: ja" if info["tools"] else "Tool-Aufrufe: nein")
+            parts.append(tr("MoE: ja") if info["experts"] else tr("MoE: nein"))
+        parts.append(tr("Tool-Aufrufe: ja") if info["tools"] else tr("Tool-Aufrufe: nein"))
         self.info_var.set("  ·  ".join(p for p in parts if p))
         self._schedule_preview()
 
@@ -1349,16 +1394,16 @@ class App(tk.Tk):
         if moe_set and not info["experts"]:
             for key in MOE_KEYS:
                 self.vars[key].set("")
-            removed = "MoE-Felder"
+            removed = tr("MoE-Felder")
             if self.vars["ngl"].get().strip() == "all":  # Stammt aus dem MoE-Vorschlag und würde --fit abschalten.
                 self.vars["ngl"].set("")
-                removed += " und -ngl all"
-            self._log_app(f"{info['name']} hat keine Experten: {removed} zurückgesetzt.")
+                removed += tr(" und -ngl all")
+            self._log_app(tr("{name} hat keine Experten: {removed} zurückgesetzt.", name=info['name'], removed=removed))
             return
         n_cpu_moe = self.vars["n_cpu_moe"].get().strip()
         if info["expert_layers"] and n_cpu_moe.isdigit() and int(n_cpu_moe) > info["expert_layers"]:
             self.vars["n_cpu_moe"].set("")
-            self._log_app(f"-ncmoe {n_cpu_moe} zurückgesetzt, dieses Modell hat nur {info['expert_layers']} Expertenschichten.")
+            self._log_app(tr("-ncmoe {n_cpu_moe} zurückgesetzt, dieses Modell hat nur {expert_layers} Expertenschichten.", n_cpu_moe=n_cpu_moe, expert_layers=info['expert_layers']))
 
     def _refresh_profiles(self):
         self.profile_box.configure(values=sorted(self.config_data.get("profiles", {})))
@@ -1366,7 +1411,7 @@ class App(tk.Tk):
     def save_profile(self):
         name = self.profile_var.get().strip()
         if not name:
-            messagebox.showinfo("Profil", "Bitte zuerst einen Profilnamen ins Feld eintragen.")
+            messagebox.showinfo(tr("Profil"), tr("Bitte zuerst einen Profilnamen ins Feld eintragen."))
             return
         data = self.values()
         data["_model"] = str(self.selected_model() or "")
@@ -1424,7 +1469,7 @@ class App(tk.Tk):
         try:
             command = subprocess.list2cmdline(self.current_args())
         except ValueError:
-            command = "Weitere Argumente: Anführungszeichen nicht geschlossen"
+            command = tr("Weitere Argumente: Anführungszeichen nicht geschlossen")
         self.preview.configure(state="normal")
         self.preview.delete("1.0", "end")
         self.preview.insert("1.0", command)
@@ -1449,7 +1494,7 @@ class App(tk.Tk):
     def _context_table(self):
         """Zeigt für das gewählte Modell, was verschiedene Kontextgrößen im VRAM belegen."""
         if not self.model_info:
-            return "Die Modelldaten werden noch gelesen."
+            return tr("Die Modelldaten werden noch gelesen.")
         lines = []
         for context in CONTEXT_TABLE:
             if self.model_info["context"] and context > self.model_info["context"]:
@@ -1458,35 +1503,35 @@ class App(tk.Tk):
             if est["usable"] is None:
                 result = ""
             elif est["over"]:
-                result = f"   {format_mib(est['over'])} MiB zu viel"
+                result = tr("   {over} MiB zu viel", over=format_mib(est['over']))
             else:
-                result = "   passt"
-            lines.append(f"{format_mib(context):>8} Tokens:   Kontext {format_mib(est['kv'])} MiB,   gesamt {format_mib(est['needed'])} MiB{result}")
+                result = tr("   passt")
+            lines.append(tr("{context:>8} Tokens:   Kontext {kv} MiB,   gesamt {needed} MiB{result}", context=format_mib(context), kv=format_mib(est['kv']), needed=format_mib(est['needed']), result=result))
         est = self._vram_estimate()
-        note = f"\nNutzbar sind {format_mib(est['usable'])} MiB." if est["usable"] is not None else ""
-        return "\n".join(lines) + note + " Die Rechnung berücksichtigt das Modell, die KV-Typen und die MoE-Felder."
+        note = tr("\nNutzbar sind {usable} MiB.", usable=format_mib(est['usable'])) if est["usable"] is not None else ""
+        return "\n".join(lines) + note + tr(" Die Rechnung berücksichtigt das Modell, die KV-Typen und die MoE-Felder.")
 
     def _warnings(self):
         values, info, out = self.values(), self.model_info, []
         if info.get("missing_parts"):
-            out.append(f"Von diesem Modell fehlen {info['missing_parts']} Teildateien, der Start wird scheitern.")
+            out.append(tr("Von diesem Modell fehlen {missing_parts} Teildateien, der Start wird scheitern.", missing_parts=info['missing_parts']))
         if "draft-mtp" in values["spec_type"] and info and not info["mtp_layers"]:
-            out.append("draft-mtp: Dieses Modell hat keinen MTP-Layer.")
+            out.append(tr("draft-mtp: Dieses Modell hat keinen MTP-Layer."))
         moe_set = values["cpu_moe"] or values["n_cpu_moe"].strip() or values["moe_cache"].strip()
         if moe_set and info and not info["experts"]:
-            out.append("MoE-Optionen: Dieses Modell hat keine Experten, sie bleiben wirkungslos.")
+            out.append(tr("MoE-Optionen: Dieses Modell hat keine Experten, sie bleiben wirkungslos."))
         if values["cpu_moe"] and values["n_cpu_moe"].strip():
-            out.append("-cmoe legt schon alle Experten in den RAM, -ncmoe bringt daneben nichts. Bitte nur eins davon nutzen.")
+            out.append(tr("-cmoe legt schon alle Experten in den RAM, -ncmoe bringt daneben nichts. Bitte nur eins davon nutzen."))
         suggestion = self._moe_suggestion()
         if suggestion and not moe_set and suggestion["n_cpu_moe"]:
-            out.append(f"Tipp für dieses MoE-Modell: -ngl all und -ncmoe {suggestion['n_cpu_moe']}. "
-                       "Übernehmen geht im ?-Fenster bei „MoE: Layer mit Experten im RAM“.")
+            out.append(tr("Tipp für dieses MoE-Modell: -ngl all und -ncmoe {n_cpu_moe}. Übernehmen geht im ?-Fenster bei "
+                "„MoE: Layer mit Experten im RAM“.", n_cpu_moe=suggestion['n_cpu_moe']))
         ctx = values["ctx_size"].strip()
         if ctx.isdigit() and info.get("context") and int(ctx) > info["context"]:
-            out.append(f"Kontextgröße liegt über dem Trainingskontext des Modells ({info['context']}).")
+            out.append(tr("Kontextgröße liegt über dem Trainingskontext des Modells ({context}).", context=info['context']))
         host = values["host"].strip()
         if host and client_host(host) != host.split(",")[0].strip() and not values["api_key"].strip():
-            out.append("Der Server ist im Netzwerk erreichbar und hat keinen API-Key.")
+            out.append(tr("Der Server ist im Netzwerk erreichbar und hat keinen API-Key."))
         return out
 
     def _moe_suggestion(self):
@@ -1500,22 +1545,22 @@ class App(tk.Tk):
     def _moe_advice(self):
         """Erklärt, was für das gewählte Modell einzutragen ist."""
         if not self.model_info:
-            return "Die Modelldaten werden noch gelesen."
+            return tr("Die Modelldaten werden noch gelesen.")
         if not self.model_info["experts"]:
-            return "Das ausgewählte Modell hat keine Experten. Lass das Feld leer."
+            return tr("Das ausgewählte Modell hat keine Experten. Lass das Feld leer.")
         if self.vram_free is None:
-            return "Der freie VRAM ist nicht bekannt, deshalb gibt es hier keinen Vorschlag."
+            return tr("Der freie VRAM ist nicht bekannt, deshalb gibt es hier keinen Vorschlag.")
         s = self._moe_suggestion()
-        facts = (f"Experten: {s['expert_mib']:.0f} MiB in {s['layers']} Layern, also {s['layer_mib']:.0f} MiB pro Layer. "
-                 f"Frei sind {s['free_mib']} MiB VRAM, die immer aktiven Teile und der Kontext brauchen etwa "
-                 f"{s['needed_mib']:.0f} MiB, und --fit hält {s['reserve_mib']} MiB Reserve.")
+        facts = (tr("Experten: {expert_mib:.0f} MiB in {layers} Layern, also {layer_mib:.0f} MiB pro Layer. Frei sind "
+            "{free_mib} MiB VRAM, die immer aktiven Teile und der Kontext brauchen etwa {needed_mib:.0f} MiB, und "
+            "--fit hält {reserve_mib} MiB Reserve.", expert_mib=s['expert_mib'], layers=s['layers'], layer_mib=s['layer_mib'], free_mib=s['free_mib'], needed_mib=s['needed_mib'], reserve_mib=s['reserve_mib']))
         if not s["n_cpu_moe"]:
-            return facts + "\nDas Modell passt komplett in den VRAM, die MoE-Felder können leer bleiben."
+            return facts + tr("\nDas Modell passt komplett in den VRAM, die MoE-Felder können leer bleiben.")
         if not s["on_gpu"]:
-            return facts + "\nEs passt keine ganze Expertenschicht in den VRAM. Nutze -cmoe, und verkleinere bei Bedarf den Kontext."
-        running = "\nLäuft gerade ein Server, ist der freie VRAM zu niedrig angesetzt." if self.proc else ""
-        return (facts + f"\nDamit passen etwa {s['on_gpu']} Expertenschichten auf die GPU. Vorschlag: -ngl all und "
-                        f"-ncmoe {s['n_cpu_moe']}. Das ist eine Schätzung, prüfe sie im Speedtest." + running)
+            return facts + tr("\nEs passt keine ganze Expertenschicht in den VRAM. Nutze -cmoe, und verkleinere bei Bedarf den Kontext.")
+        running = tr("\nLäuft gerade ein Server, ist der freie VRAM zu niedrig angesetzt.") if self.proc else ""
+        return (facts + tr("\nDamit passen etwa {on_gpu} Expertenschichten auf die GPU. Vorschlag: -ngl all und -ncmoe "
+            "{n_cpu_moe}. Das ist eine Schätzung, prüfe sie im Speedtest.", on_gpu=s['on_gpu'], n_cpu_moe=s['n_cpu_moe']) + running)
 
     def apply_moe_suggestion(self):
         suggestion = self._moe_suggestion()
@@ -1535,7 +1580,7 @@ class App(tk.Tk):
     def _detect_devices(self):
         exe = self.exe_path()
         if not exe.is_file():
-            self.gpu_var.set(f"llama-server.exe nicht gefunden: {exe}")
+            self.gpu_var.set(tr("llama-server.exe nicht gefunden: {exe}", exe=exe))
             self._style_gpu_banner(warn=True, show_button=False)
             return
 
@@ -1548,7 +1593,7 @@ class App(tk.Tk):
                                          encoding="utf-8", timeout=30, cwd=exe.parent,
                                          creationflags=subprocess.CREATE_NO_WINDOW)
             except (OSError, subprocess.TimeoutExpired) as err:
-                self.events.put(lambda message=f"Geräteprüfung fehlgeschlagen: {err}": self.gpu_var.set(message))
+                self.events.put(lambda message=tr("Geräteprüfung fehlgeschlagen: {err}", err=err): self.gpu_var.set(message))
                 if self.sweep_pending:
                     self.events.put(self._begin_sweep)
                 if self.optimize_pending:
@@ -1571,16 +1616,16 @@ class App(tk.Tk):
         if self.optimize_pending:
             self._begin_optimizer()
         if devices:
-            self.gpu_var.set("GPU: " + "   |   ".join(devices))
+            self.gpu_var.set(tr("GPU: ") + "   |   ".join(devices))
             self._style_gpu_banner(warn=False, show_button=False)
             return
         folder = Path(self.llama_dir.get())
         if (folder / "ggml-cuda.dll").exists() and not list(folder.glob("cublas64_*.dll")):
-            self.gpu_var.set("Keine GPU erkannt: Die CUDA-Laufzeit (cublas64_*.dll, cudart64_*.dll) fehlt im "
-                             "llama.cpp-Ordner. Der Server läuft nur auf der CPU.")
+            self.gpu_var.set(tr("Keine GPU erkannt: Die CUDA-Laufzeit (cublas64_*.dll, cudart64_*.dll) fehlt im "
+                             "llama.cpp-Ordner. Der Server läuft nur auf der CPU."))
             self._style_gpu_banner(warn=True, show_button=True)
         else:
-            self.gpu_var.set("Keine GPU erkannt. Der Server läuft nur auf der CPU.")
+            self.gpu_var.set(tr("Keine GPU erkannt. Der Server läuft nur auf der CPU."))
             self._style_gpu_banner(warn=True, show_button=False)
 
     def _style_gpu_banner(self, warn, show_button):
@@ -1603,22 +1648,22 @@ class App(tk.Tk):
             return
         errors = validate(self.values())
         if not self.exe_path().is_file():
-            errors.append(f"llama-server.exe nicht gefunden: {self.exe_path()}")
+            errors.append(tr("llama-server.exe nicht gefunden: {exe_path}", exe_path=self.exe_path()))
         if not self.selected_model():
-            errors.append("Kein Modell ausgewählt.")
+            errors.append(tr("Kein Modell ausgewählt."))
         host = client_host(self.vars["host"].get().strip())
         port = self.vars["port"].get().strip() or "8080"
         if not errors and self._port_in_use(host, int(port)):
-            errors.append(f"Port {port} ist bereits belegt. Läuft noch ein anderer Server?")
+            errors.append(tr("Port {port} ist bereits belegt. Läuft noch ein anderer Server?", port=port))
         if errors:
-            messagebox.showerror("Start nicht möglich", "\n".join(errors))
+            messagebox.showerror(tr("Start nicht möglich"), "\n".join(errors))
             return
 
         if not self.model_info:  # Die Automatik braucht die Metadaten, auch wenn das Lesen noch läuft.
             try:
                 self._set_model_info(self.selected_model(), read_gguf_info(self.selected_model()))
             except (OSError, ValueError, struct.error, OverflowError, MemoryError) as err:
-                self._log_app(f"Metadaten nicht lesbar: {err}")
+                self._log_app(tr("Metadaten nicht lesbar: {err}", err=err))
         args = self.current_args()
         if not self.vars["port"].get().strip():
             args += ["--port", port]
@@ -1629,7 +1674,7 @@ class App(tk.Tk):
                 creationflags=subprocess.CREATE_NO_WINDOW)
         except OSError as err:
             self.proc = None
-            messagebox.showerror("Start fehlgeschlagen", str(err))
+            messagebox.showerror(tr("Start fehlgeschlagen"), str(err))
             return
 
         self._save_config()
@@ -1649,8 +1694,8 @@ class App(tk.Tk):
                                       fit_reserve_mib(self.vars["fit_target"].get())).strip() or "none",
             "ubatch": self.vars["ubatch"].get().strip() or "512",
         }
-        self._log_app("Start: " + subprocess.list2cmdline(args))
-        self._set_status("Startet…", "#d9a400")
+        self._log_app(tr("Start: ") + subprocess.list2cmdline(args))
+        self._set_status(tr("Startet…"), "#d9a400")
         self.start_button.configure(state="disabled")
         self.stop_button.configure(state="normal")
         threading.Thread(target=self._read_output, args=(self.proc,), daemon=True).start()
@@ -1668,7 +1713,7 @@ class App(tk.Tk):
             self.stop_requested = True
             if self.speed_cancel:  # Ein laufender Test endet als Abbruch, nicht als Verbindungsfehler.
                 self.speed_cancel.set()
-            self._set_status("Wird beendet…", "#d9a400")
+            self._set_status(tr("Wird beendet…"), "#d9a400")
             self.proc.terminate()
 
     def _read_output(self, proc):
@@ -1695,7 +1740,7 @@ class App(tk.Tk):
 
     def _on_loading(self, proc):
         if proc is self.proc:
-            self._set_status("Modell wird geladen…", "#d9a400")
+            self._set_status(tr("Modell wird geladen…"), "#d9a400")
 
     def _on_ready(self, proc, ctx):
         if proc is not self.proc:
@@ -1704,8 +1749,8 @@ class App(tk.Tk):
         self.server_ctx = ctx
         self.web_button.configure(state="normal")
         self._update_speed_buttons()
-        suffix = f"   ·   Kontext {ctx}" if ctx else ""
-        self._set_status(f"Bereit   ·   {self.server_url}{suffix}", "#2e9e4f")
+        suffix = tr("   ·   Kontext {ctx}", ctx=ctx) if ctx else ""
+        self._set_status(tr("Bereit   ·   {server_url}{suffix}", server_url=self.server_url, suffix=suffix), "#2e9e4f")
         self.sync_opencode()
         self._tell_chat()
 
@@ -1721,12 +1766,12 @@ class App(tk.Tk):
         if self.speed_cancel:
             self.speed_cancel.set()
         self._update_speed_buttons()
-        self._log_app(f"Server beendet (Exit-Code {code}).")
+        self._log_app(tr("Server beendet (Exit-Code {code}).", code=code))
         if failed_to_start:
-            self._log_app("Der Server hat vor dem Bereit-Zustand aufgehört, die Ursache steht in den Zeilen darüber.")
+            self._log_app(tr("Der Server hat vor dem Bereit-Zustand aufgehört, die Ursache steht in den Zeilen darüber."))
             if "draft" in self.server_settings.get("spec", ""):
-                self._log_app(f"Es war {self.server_settings['spec']} aktiv. Falls es daran liegt: Speculative auf ngram-mod oder none stellen.")
-        self._set_status("Gestoppt", "#888888")
+                self._log_app(tr("Es war {spec} aktiv. Falls es daran liegt: Speculative auf ngram-mod oder none stellen.", spec=self.server_settings['spec']))
+        self._set_status(tr("Gestoppt"), "#888888")
         self._tell_chat()
         self._detect_devices()  # Der VRAM ist wieder frei, die Vorschläge rechnen mit dem neuen Wert.
 
@@ -1775,7 +1820,7 @@ class App(tk.Tk):
             merged = merge_opencode_config(existing, settings["base_url"], settings["model_id"], settings["name"],
                                            self._effective_context(), settings["api_key"])
             if merged == existing:
-                self._log_app(f"OpenCode: {OPENCODE_PROVIDER}/{settings['model_id']} ist bereits eingetragen.")
+                self._log_app(tr("OpenCode: {opencode_provider}/{model_id} ist bereits eingetragen.", opencode_provider=OPENCODE_PROVIDER, model_id=settings['model_id']))
                 return
             path.parent.mkdir(parents=True, exist_ok=True)
             if path.exists():
@@ -1784,9 +1829,9 @@ class App(tk.Tk):
             temp.write_text(json.dumps(merged, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
             temp.replace(path)
         except (OSError, ValueError) as err:
-            self._log_app(f"OpenCode-Konfiguration nicht geändert: {path}: {err}")
+            self._log_app(tr("OpenCode-Konfiguration nicht geändert: {path}: {err}", path=path, err=err))
             return
-        self._log_app(f"OpenCode: {OPENCODE_PROVIDER}/{settings['model_id']} eingetragen in {path}")
+        self._log_app(tr("OpenCode: {opencode_provider}/{model_id} eingetragen in {path}", opencode_provider=OPENCODE_PROVIDER, model_id=settings['model_id'], path=path))
         threading.Thread(target=self._reload_opencode, daemon=True).start()
 
     def _reload_opencode(self):
@@ -1799,10 +1844,10 @@ class App(tk.Tk):
                 return
             run = subprocess.run([str(cli), "reload"], capture_output=True, timeout=30,
                                  creationflags=subprocess.CREATE_NO_WINDOW)
-            message = "OpenCode Desktop hat die Konfiguration neu geladen." if run.returncode == 0 else \
-                "OpenCode Desktop konnte nicht neu laden. Bitte die App neu öffnen."
+            message = tr("OpenCode Desktop hat die Konfiguration neu geladen.") if run.returncode == 0 else \
+                tr("OpenCode Desktop konnte nicht neu laden. Bitte die App neu öffnen.")
         except (OSError, subprocess.TimeoutExpired) as err:
-            message = f"OpenCode Desktop konnte nicht neu laden: {err}"
+            message = tr("OpenCode Desktop konnte nicht neu laden: {err}", err=err)
         self.events.put(lambda: self._log_app(message))
 
     # ---------- VRAM-Prüfung ----------
@@ -1811,7 +1856,7 @@ class App(tk.Tk):
         """Zeigt, wer den VRAM belegt. Das Fenster liest nur und beendet selbst keine Programme."""
         if self.vram_window is None or not self.vram_window.winfo_exists():
             self.vram_window = window = tk.Toplevel(self)
-            window.title("VRAM-Prüfung")
+            window.title(tr("VRAM-Prüfung"))
             window.geometry(f"760x620+{self.winfo_rootx() + 60}+{self.winfo_rooty() + 60}")
             window.minsize(620, 460)
             window.transient(self)
@@ -1825,7 +1870,7 @@ class App(tk.Tk):
             ttk.Label(frame, textvariable=self.vram_verdict, wraplength=720).pack(anchor="w", pady=(6, 8))
             bottom = ttk.Frame(frame)
             bottom.pack(side="bottom", fill="x", pady=(8, 0))
-            self.vram_refresh = ttk.Button(bottom, text="Neu prüfen", command=self.refresh_vram_check)
+            self.vram_refresh = ttk.Button(bottom, text=tr("Neu prüfen"), command=self.refresh_vram_check)
             self.vram_refresh.pack(side="left")
             self.vram_delta = tk.StringVar()
             ttk.Label(bottom, textvariable=self.vram_delta).pack(side="left", padx=(10, 0))
@@ -1833,7 +1878,7 @@ class App(tk.Tk):
                 side="bottom", anchor="w", pady=(8, 0))
             table = ttk.Frame(frame)
             table.pack(fill="both", expand=True)
-            columns = {"name": ("Programm", 190, "w"), "mib": ("Höchstens (MiB)", 110, "e"), "kind": ("Was geht", 400, "w")}
+            columns = {"name": (tr("Programm"), 190, "w"), "mib": (tr("Höchstens (MiB)"), 110, "e"), "kind": (tr("Was geht"), 400, "w")}
             self.vram_table = ttk.Treeview(table, columns=list(columns), show="headings")
             for key, (title, width, anchor) in columns.items():
                 self.vram_table.heading(key, text=title, anchor=anchor)
@@ -1849,7 +1894,7 @@ class App(tk.Tk):
 
     def refresh_vram_check(self):
         self.vram_refresh.configure(state="disabled")
-        self.vram_summary.set("Wird geprüft…")
+        self.vram_summary.set(tr("Wird geprüft…"))
         own_pid = self.proc.pid if self.proc else None
 
         def work():
@@ -1866,7 +1911,7 @@ class App(tk.Tk):
         if self.vram_window is None or not self.vram_window.winfo_exists():
             return
         self.vram_refresh.configure(state="normal")
-        self.vram_summary.set("Die VRAM-Zähler konnten nicht gelesen werden.")
+        self.vram_summary.set(tr("Die VRAM-Zähler konnten nicht gelesen werden."))
         self.vram_verdict.set(message)
 
     def _on_vram_result(self, result):
@@ -1874,24 +1919,24 @@ class App(tk.Tk):
             return
         self.vram_refresh.configure(state="normal")
         if result["total"]:
-            self.vram_summary.set(f"Gesamt {result['total']} MiB   ·   Belegt {result['used']} MiB   ·   "
-                                  f"Vom Treiber reserviert {result['reserved']} MiB   ·   Frei {result['free']} MiB")
+            self.vram_summary.set(tr("Gesamt {total} MiB   ·   Belegt {used} MiB   ·   Vom Treiber reserviert {reserved} MiB   ·   Frei "
+                "{free} MiB", total=result['total'], used=result['used'], reserved=result['reserved'], free=result['free']))
         else:
-            self.vram_summary.set(f"Belegt {result['used']:.0f} MiB")
+            self.vram_summary.set(tr("Belegt {used:.0f} MiB", used=result['used']))
         self.vram_verdict.set(self._vram_verdict(result))
         self.vram_table.delete(*self.vram_table.get_children())
         for row in result["rows"]:
             self.vram_table.insert("", "end", values=(row["name"], f"{row['mib']:.0f}", VRAM_KIND_TEXT[row["kind"]]))
         self.vram_note.set(
-            "Die Werte pro Programm sind Obergrenzen: Windows zählt dort auch Speicher, der gerade nicht im VRAM liegt, deshalb "
+            tr("Die Werte pro Programm sind Obergrenzen: Windows zählt dort auch Speicher, der gerade nicht im VRAM liegt, deshalb "
             "kann ihre Summe größer sein als der belegte VRAM. Ein Programm schließt du selbst, dieses Fenster beendet nichts. "
-            "Danach zeigt „Neu prüfen“, wie viel wirklich frei wurde.")
+            "Danach zeigt „Neu prüfen“, wie viel wirklich frei wurde."))
         free = result["free"]
         if free is not None:
             if self.vram_first_free is None:
                 self.vram_first_free = free
             change = free - self.vram_first_free
-            self.vram_delta.set(f"Seit der ersten Prüfung: {change:+d} MiB frei" if change else "")
+            self.vram_delta.set(tr("Seit der ersten Prüfung: {change:+d} MiB frei", change=change) if change else "")
         if not self.proc:  # Die Vorschläge für MoE und MTP rechnen mit dem neuen Wert.
             self._detect_devices()
 
@@ -1899,23 +1944,23 @@ class App(tk.Tk):
         freeable = result["freeable"]
         parts = []
         if freeable < 50:
-            parts.append("Durch Schließen von Programmen lässt sich hier praktisch nichts freigeben.")
+            parts.append(tr("Durch Schließen von Programmen lässt sich hier praktisch nichts freigeben."))
         else:
-            parts.append(f"Durch Schließen der Programme werden höchstens etwa {freeable:.0f} MiB frei.")
+            parts.append(tr("Durch Schließen der Programme werden höchstens etwa {freeable:.0f} MiB frei.", freeable=freeable))
             suggestion = self._moe_suggestion()
             if suggestion:
                 extra = int(freeable // suggestion["layer_mib"])
-                parts.append(f"Das reicht für {extra} weitere Expertenschichten." if extra
-                             else f"Das ist weniger als eine Expertenschicht ({suggestion['layer_mib']:.0f} MiB).")
+                parts.append(tr("Das reicht für {extra} weitere Expertenschichten.", extra=extra) if extra
+                             else tr("Das ist weniger als eine Expertenschicht ({layer_mib:.0f} MiB).", layer_mib=suggestion['layer_mib']))
         if len(result["gpus"]) == 1:
-            parts.append(f"Der Windows-Desktop läuft über deine einzige Grafikkarte ({result['gpus'][0]}), deshalb bleibt sein "
-                         "Anteil belegt. Der Task-Manager zeigt ihn meist nicht als Programm an.")
+            parts.append(tr("Der Windows-Desktop läuft über deine einzige Grafikkarte ({gpus}), deshalb bleibt sein Anteil "
+                "belegt. Der Task-Manager zeigt ihn meist nicht als Programm an.", gpus=result['gpus'][0]))
         elif len(result["gpus"]) > 1:
-            parts.append("Du hast mehrere Grafikkarten. Hängt der Monitor an der anderen Karte, belegt der Desktop diese hier nicht.")
+            parts.append(tr("Du hast mehrere Grafikkarten. Hängt der Monitor an der anderen Karte, belegt der Desktop diese hier nicht."))
         reserve = fit_reserve_mib(self.vars["fit_target"].get())
         if reserve > FIT_SMALL_RESERVE_MIB and self.vars["fit"].get().strip() != "off":
-            parts.append(f"Zusätzlich hält --fit {reserve} MiB Reserve frei. Das Feld „Fit: freier VRAM“ gibt oft mehr "
-                         "Platz als das Schließen von Programmen, lässt aber weniger Puffer.")
+            parts.append(tr("Zusätzlich hält --fit {reserve} MiB Reserve frei. Das Feld „Fit: freier VRAM“ gibt oft mehr Platz "
+                "als das Schließen von Programmen, lässt aber weniger Puffer.", reserve=reserve))
         return " ".join(parts)
 
     # ---------- Speedtest ----------
@@ -1923,7 +1968,7 @@ class App(tk.Tk):
     def _update_speed_buttons(self):
         """Ein laufender Test lässt sich abbrechen. Ohne Server ist der Button gesperrt."""
         for button in self.speed_buttons:
-            button.configure(text="Abbrechen" if self.speed_cancel else "Speedtest starten",
+            button.configure(text=tr("Abbrechen") if self.speed_cancel else tr("Speedtest starten"),
                              state="normal" if self.server_ready else "disabled")
 
     def _prompt_test_target(self):
@@ -1936,7 +1981,7 @@ class App(tk.Tk):
     def toggle_speedtest(self):
         if self.speed_cancel:
             self.speed_cancel.set()
-            self.speed_status.set("Wird abgebrochen…")
+            self.speed_status.set(tr("Wird abgebrochen…"))
             return
         if not self.server_ready:
             return
@@ -1946,7 +1991,7 @@ class App(tk.Tk):
         self.speed_count = 0
         self.speed_first = None
         self.speed_bar.configure(value=0, maximum=max(target, 1))
-        self.speed_status.set("Der Prompt wird vorbereitet…")
+        self.speed_status.set(tr("Der Prompt wird vorbereitet…"))
         self.speed_text.configure(state="normal")
         self.speed_text.delete("1.0", "end")
         self.speed_text.configure(state="disabled")
@@ -1963,7 +2008,7 @@ class App(tk.Tk):
         except (ValueError, AttributeError):
             busy = False
         if busy:
-            self.events.put(lambda: self._on_speedtest_done(error="Der Server bearbeitet gerade eine andere Anfrage."))
+            self.events.put(lambda: self._on_speedtest_done(error=tr("Der Server bearbeitet gerade eine andere Anfrage.")))
             return
         try:
             prompt = None
@@ -1971,13 +2016,13 @@ class App(tk.Tk):
                 prompt = run_prompt_test(url, settings["model_id"], settings["api_key"], target,
                                          lambda progress: self.events.put(lambda: self._on_prompt_progress(progress)), cancel)
                 if prompt is None:
-                    self.events.put(lambda: self._on_speedtest_done(error="Abgebrochen."))
+                    self.events.put(lambda: self._on_speedtest_done(error=tr("Abgebrochen.")))
                     return
             self.events.put(self._on_answer_phase)
             result = run_speedtest(url, settings["model_id"], settings["api_key"],
                                    lambda piece: self.events.put(lambda: self._on_speed_token(piece)), cancel, SWEEP_ANSWER_SECONDS)
         except (OSError, ValueError, http.client.HTTPException) as err:
-            message = "Abgebrochen." if cancel.is_set() else f"Fehlgeschlagen: {err}"
+            message = tr("Abgebrochen.") if cancel.is_set() else tr("Fehlgeschlagen: {err}", err=err)
             self.events.put(lambda: self._on_speedtest_done(error=message))
             return
         self.events.put(lambda: self._on_speedtest_done(result, prompt, settings, ctx))
@@ -1989,14 +2034,14 @@ class App(tk.Tk):
         total = progress.get("total", 0)
         self.speed_bar.configure(value=processed, maximum=total or self.speed_bar["maximum"])
         seconds = progress.get("time_ms", 0) / 1000
-        speed = f"   ·   ca. {processed / seconds:.0f} Tok/s" if seconds > 0 and processed else ""
-        self.speed_status.set(f"Einlesen: {processed} von {total} Tokens{speed}")
+        speed = tr("   ·   ca. {value:.0f} Tok/s", value=processed / seconds) if seconds > 0 and processed else ""
+        self.speed_status.set(tr("Einlesen: {processed} von {total} Tokens{speed}", processed=processed, total=total, speed=speed))
 
     def _on_answer_phase(self):
         if self.speed_cancel is None or self.speed_cancel.is_set():
             return
         self.speed_bar.configure(value=0, maximum=SWEEP_ANSWER_SECONDS)
-        self.speed_status.set("Die Antwort wird vorbereitet…")
+        self.speed_status.set(tr("Die Antwort wird vorbereitet…"))
 
     def _on_speed_token(self, piece):
         now = time.perf_counter()
@@ -2005,7 +2050,7 @@ class App(tk.Tk):
         elapsed = now - self.speed_first
         self.speed_bar.configure(value=elapsed)
         if elapsed > 0:
-            self.speed_status.set(f"Antwort: {self.speed_count} Tokens   ·   ca. {(self.speed_count - 1) / elapsed:.1f} Tok/s")
+            self.speed_status.set(tr("Antwort: {speed_count} Tokens   ·   ca. {value:.1f} Tok/s", speed_count=self.speed_count, value=(self.speed_count - 1) / elapsed))
         at_end = self.speed_text.yview()[1] >= 0.999
         self.speed_text.configure(state="normal")
         self.speed_text.insert("end", piece)
@@ -2017,10 +2062,10 @@ class App(tk.Tk):
         self.speed_cancel = None
         self._update_speed_buttons()
         if result is None:
-            self.speed_status.set(error or "Abgebrochen.")
+            self.speed_status.set(error or tr("Abgebrochen."))
             return
         row = {
-            "time": time.strftime("%d.%m. %H:%M"),
+            "time": time.strftime(tr("%d.%m. %H:%M")),
             "model": settings["file"],
             "ctx": ctx or "",
             "ngl": settings["ngl"],
@@ -2034,13 +2079,13 @@ class App(tk.Tk):
             "total": round(result["total"] + (prompt["total"] if prompt else 0), 1),
             "draft": f"{100 * result['draft_accepted'] / result['draft_n']:.0f} %" if result["draft_n"] else "",
         }
-        summary = f"Antwort: {row['tps']} Tok/s"
+        summary = tr("Antwort: {tps} Tok/s", tps=row['tps'])
         if prompt:
-            summary = f"Einlesen: {row['prompt_tps']} Tok/s   ·   {summary}"
+            summary = tr("Einlesen: {prompt_tps} Tok/s   ·   {summary}", prompt_tps=row['prompt_tps'], summary=summary)
         else:
-            summary += "   ·   Einlesen nicht gemessen, der Kontext ist zu klein."
+            summary += tr("   ·   Einlesen nicht gemessen, der Kontext ist zu klein.")
         if result["finish"] == "stop":
-            summary += "   ·   Das Modell hat vor Ablauf der Messzeit aufgehört, der Wert ist weniger aussagekräftig."
+            summary += tr("   ·   Das Modell hat vor Ablauf der Messzeit aufgehört, der Wert ist weniger aussagekräftig.")
         history = self.config_data.setdefault("speedtests", [])
         history.append(row)
         del history[:-100]
@@ -2070,28 +2115,38 @@ class App(tk.Tk):
             self.optimize_window.lift()
             return
         if self.sweep_cancel or self.sweep_pending or self.optimize_pending or self.speed_cancel:
-            messagebox.showinfo("Modell optimieren", "Es läuft gerade schon ein Test. Warte, bis er fertig ist.")
+            messagebox.showinfo(tr("Modell optimieren"), tr("Es läuft gerade schon ein Test. Warte, bis er fertig ist."))
             return
         if self.selected_model() and not self.model_info:  # Die Metadaten werden vielleicht gerade noch im Hintergrund gelesen.
             try:
                 self._set_model_info(self.selected_model(), read_gguf_info(self.selected_model()))
             except (OSError, ValueError, struct.error, OverflowError, MemoryError) as err:
-                self._log_app(f"Metadaten nicht lesbar: {err}")
+                self._log_app(tr("Metadaten nicht lesbar: {err}", err=err))
         errors = validate({**self.values(), "ctx_size": ""})
         if not self.exe_path().is_file():
-            errors.append(f"llama-server.exe nicht gefunden: {self.exe_path()}")
+            errors.append(tr("llama-server.exe nicht gefunden: {exe_path}", exe_path=self.exe_path()))
         if not self.selected_model() or not self.model_info:
-            errors.append("Kein lesbares Modell ausgewählt.")
+            errors.append(tr("Kein lesbares Modell ausgewählt."))
         if errors:
-            messagebox.showerror("Modell optimieren nicht möglich", "\n".join(errors))
+            messagebox.showerror(tr("Modell optimieren nicht möglich"), "\n".join(errors))
             return
         others = other_llama_servers(self.proc.pid if self.proc else None)
         if others and not messagebox.askokcancel(
-                "Modell optimieren", f"Es laufen noch {others} andere llama-server. Sie belegen VRAM und verfälschen die Messung. Trotzdem starten?"):
+                tr("Modell optimieren"), tr("Es laufen noch {others} andere llama-server. Sie belegen VRAM und verfälschen die Messung. "
+                    "Trotzdem starten?", others=others)):
             return
+        self.optimize_resume = None
+        last = self._last_optimizer_run(self.selected_model())
+        if last:
+            answer = messagebox.askyesnocancel(tr("Modell optimieren"), tr(
+                "Für dieses Modell gibt es einen gespeicherten Lauf vom {time}. Fortsetzen?\n\nJa: Die gemessenen Schritte bleiben, es geht beim "
+                "ersten offenen Schritt weiter.\nNein: Neu beginnen.", time=last[1].get("time", "")))
+            if answer is None:
+                return
+            self.optimize_resume = last if answer else None
         self.optimize_restart = bool(self.proc)
         if self.proc:
-            if not messagebox.askokcancel("Modell optimieren", "Der laufende Server wird für die Messungen beendet und danach wieder gestartet."):
+            if not messagebox.askokcancel(tr("Modell optimieren"), tr("Der laufende Server wird für die Messungen beendet und danach wieder gestartet.")):
                 return
             self.optimize_pending = True
             self.optimize_button.configure(state="disabled")
@@ -2104,20 +2159,46 @@ class App(tk.Tk):
         model = self.selected_model()
         values = self.values()
         values["spec_type"] = resolve_spec_type(values["spec_type"], self.model_info, self.vram_free, fit_reserve_mib(values["fit_target"]))
-        folder = self.config_path.parent / SWEEP_FOLDER / "optimierung" / f"{re.sub(r'[^\w.-]+', '_', model.stem)}_{time.strftime('%Y-%m-%d_%H-%M-%S')}"
+        resume = getattr(self, "optimize_resume", None)
+        self.optimize_resume = None
+        folder = resume[0] if resume else self._optimizer_folder(model) / f"{self._optimizer_prefix(model)}{time.strftime('%Y-%m-%d_%H-%M-%S')}"
         self.optimize_button.configure(state="disabled")
         self.sweep_button.configure(state="disabled")
         self.start_button.configure(state="disabled")
-        self._set_status("Modell wird optimiert", "#d9a400")
-        self._log_app(f"Modell optimieren: {model.name}. Diagramme und Messwerte: {folder}")
-        self.optimize_window = OptimizeWindow(self, self.exe_path(), model, dict(self.model_info), values, self.vram_free, folder)
+        self._set_status(tr("Modell wird optimiert"), "#d9a400")
+        self._log_app(tr("Modell optimieren: {name}. Diagramme und Messwerte: {folder}", name=model.name, folder=folder))
+        self.optimize_window = OptimizeWindow(self, self.exe_path(), model, dict(self.model_info), values, self.vram_free, folder, resume=resume[1] if resume else None)
+
+    def _optimizer_folder(self, model):
+        return self.config_path.parent / SWEEP_FOLDER / "optimierung"
+
+    @staticmethod
+    def _optimizer_prefix(model):
+        return f"{re.sub(r'[^\w.-]+', '_', model.stem)}_"
+
+    def _last_optimizer_run(self, model):
+        """Der jüngste gespeicherte Lauf für dieses Modell, wenn sein Kontext-Schritt fertig ist. Sonst lohnt sich das Fortsetzen nicht."""
+        if model is None:
+            return None
+        prefix = self._optimizer_prefix(model)
+        folders = sorted((path for path in self._optimizer_folder(model).glob(prefix + "*") if path.is_dir() and path.name[len(prefix):][:1].isdigit()),
+                         key=lambda path: path.name, reverse=True)
+        for folder in folders[:1]:
+            try:
+                report = json.loads((folder / "ergebnis.json").read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                return None
+            context = next((step for step in report.get("steps", []) if step.get("key") == "context"), None)
+            if report.get("model") == model.stem and context and context.get("done") and context.get("points"):
+                return folder, report
+        return None
 
     def on_optimizer_closed(self):
         self.optimize_window = None
         self.optimize_button.configure(state="normal")
         self.sweep_button.configure(state="normal")
         self.start_button.configure(state="normal")
-        self._set_status("Gestoppt", "#888888")
+        self._set_status(tr("Gestoppt"), "#888888")
         self._detect_devices()
         if self.optimize_restart:
             self.optimize_restart = False
@@ -2178,17 +2259,17 @@ class App(tk.Tk):
         if not self.model_info:
             self.sweep_hint.set("")
         elif self.sweep_contexts_var.get().strip():
-            self.sweep_hint.set("Eigene Liste, zum Beispiel: 16384, 32k, 40000")
+            self.sweep_hint.set(tr("Eigene Liste, zum Beispiel: 16384, 32k, 40000"))
         else:
             plan = sweep_contexts(self._sweep_limit(), self.model_info.get("context"))
-            self.sweep_hint.set("Automatisch: " + ", ".join(llama_plot.compact_tokens(value) for value in plan))
+            self.sweep_hint.set(tr("Automatisch: ") + ", ".join(llama_plot.compact_tokens(value) for value in plan))
 
     def toggle_sweep(self):
         if self.optimize_window is not None or self.optimize_pending:
             return
         if self.sweep_cancel:
             self.sweep_cancel.set()
-            self.sweep_status.set("Wird abgebrochen…")
+            self.sweep_status.set(tr("Wird abgebrochen…"))
             if self.sweep_proc and self.sweep_proc.poll() is None:
                 self.sweep_proc.terminate()
             return
@@ -2196,29 +2277,30 @@ class App(tk.Tk):
             return
         errors = validate({**self.values(), "ctx_size": ""})
         if not self.exe_path().is_file():
-            errors.append(f"llama-server.exe nicht gefunden: {self.exe_path()}")
+            errors.append(tr("llama-server.exe nicht gefunden: {exe_path}", exe_path=self.exe_path()))
         if not self.selected_model() or not self.model_info:
-            errors.append("Kein lesbares Modell ausgewählt.")
+            errors.append(tr("Kein lesbares Modell ausgewählt."))
         if not errors:
             try:
                 self._sweep_plan()
             except ValueError as err:
                 errors.append(str(err))
         if errors:
-            messagebox.showerror("Kontext-Test nicht möglich", "\n".join(errors))
+            messagebox.showerror(tr("Kontext-Test nicht möglich"), "\n".join(errors))
             return
         own_pid = self.proc.pid if self.proc else None
         others = other_llama_servers(own_pid)
         if others and not messagebox.askokcancel(
-                "Kontext-Test", f"Es laufen noch {others} andere llama-server. Sie belegen VRAM und verfälschen die Messung. Trotzdem starten?"):
+                tr("Kontext-Test"), tr("Es laufen noch {others} andere llama-server. Sie belegen VRAM und verfälschen die Messung. "
+                    "Trotzdem starten?", others=others)):
             return
         self.sweep_restart = bool(self.proc)
         if self.proc:
-            if not messagebox.askokcancel("Kontext-Test", "Der laufende Server wird für den Test beendet und danach wieder gestartet."):
+            if not messagebox.askokcancel(tr("Kontext-Test"), tr("Der laufende Server wird für den Test beendet und danach wieder gestartet.")):
                 return
             self.sweep_pending = True
             self.sweep_button.configure(state="disabled")
-            self.sweep_status.set("Der laufende Server wird beendet…")
+            self.sweep_status.set(tr("Der laufende Server wird beendet…"))
             self.stop_server()  # Sobald er weg ist und der VRAM neu gelesen wurde, geht es in _set_devices weiter.
             return
         self._begin_sweep()
@@ -2228,7 +2310,7 @@ class App(tk.Tk):
         contexts = [c for c in self._sweep_plan() if not self.model_info["context"] or c <= self.model_info["context"]]
         if not contexts:
             self.sweep_button.configure(state="normal")
-            self.sweep_status.set("Alle Kontexte liegen über dem Maximum dieses Modells.")
+            self.sweep_status.set(tr("Alle Kontexte liegen über dem Maximum dieses Modells."))
             if self.sweep_restart:
                 self.sweep_restart = False
                 self.start_server()
@@ -2237,7 +2319,7 @@ class App(tk.Tk):
         values["spec_type"] = resolve_spec_type(values["spec_type"], self.model_info, self.vram_free, fit_reserve_mib(values["fit_target"]))
         shown = build_args("", "", {key: value for key, value in values.items() if key not in ("ctx_size", "host", "port", "api_key")})
         model = self.selected_model()
-        stamp = time.strftime("%d.%m.%Y %H:%M")
+        stamp = time.strftime(tr("%d.%m.%Y %H:%M"))
         self.sweep_current = {
             "time": stamp,
             "model": model.stem,
@@ -2252,13 +2334,13 @@ class App(tk.Tk):
         self.sweep_cancel = threading.Event()
         self.sweep_shown = self.sweep_current
         self.sweep_bar.configure(value=0, maximum=len(contexts))
-        self.sweep_button.configure(text="Abbrechen", state="normal")
+        self.sweep_button.configure(text=tr("Abbrechen"), state="normal")
         self.start_button.configure(state="disabled")
-        self._set_status("Kontext-Test läuft", "#d9a400")
+        self._set_status(tr("Kontext-Test läuft"), "#d9a400")
         self.notebook.select(self.sweep_tab)
         self._fill_sweep_table(self.sweep_current)
         self._draw_sweep()
-        self._log_app(f"Kontext-Test: {len(contexts)} Messpunkte für {model.name}.")
+        self._log_app(tr("Kontext-Test: {count} Messpunkte für {name}.", count=len(contexts), name=model.name))
         threading.Thread(target=self._sweep_worker, args=(self.exe_path(), model, values, contexts, self.sweep_cancel), daemon=True).start()
 
     def _sweep_image_path(self, stem):
@@ -2285,7 +2367,7 @@ class App(tk.Tk):
         url = f"http://127.0.0.1:{port}"
         api_key = values["api_key"].strip()
         args = build_args(exe, model, {**values, "ctx_size": str(requested), "host": "127.0.0.1", "port": str(port)})
-        point = {"requested": requested, "ctx": requested, "state": "Fehler"}
+        point = {"requested": requested, "ctx": requested, "state": tr("Fehler")}
         tail = deque(maxlen=12)
         try:
             proc = subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
@@ -2296,13 +2378,13 @@ class App(tk.Tk):
         self.sweep_proc = proc
         threading.Thread(target=lambda: [tail.append(line.rstrip()) for line in proc.stdout], daemon=True).start()
         try:
-            announce("Modell wird geladen")
+            announce(tr("Modell wird geladen"))
             started = time.perf_counter()
             while http_get(f"{url}/health")[0] != 200:
                 if cancel.is_set():
                     return point
                 if proc.poll() is not None or time.perf_counter() - started > SWEEP_LOAD_TIMEOUT:
-                    point["error"] = next((l for l in reversed(tail) if " E " in l or "error" in l.lower()), "Der Server ist nicht gestartet.")[:300]
+                    point["error"] = next((l for l in reversed(tail) if " E " in l or "error" in l.lower()), tr("Der Server ist nicht gestartet."))[:300]
                     return point
                 time.sleep(0.3)
             _, body = http_get(f"{url}/props", api_key, timeout=10)
@@ -2312,14 +2394,14 @@ class App(tk.Tk):
                 pass
             target = min(PROMPT_TEST_TOKENS, point["ctx"] - PROMPT_TEST_RESERVE)
             if target >= PROMPT_TEST_MIN_TOKENS:
-                announce("Prompt wird eingelesen")
+                announce(tr("Prompt wird eingelesen"))
                 prompt = run_prompt_test(url, "sweep", api_key, target, lambda progress: None, cancel)
                 if prompt is None:
                     return point
                 point["prompt_tps"] = round(prompt["prompt_tps"], 1)
                 point["prompt_tokens"] = prompt["tokens"]
             point["vram"] = vram_used_mib()
-            announce(f"Antwort wird {SWEEP_ANSWER_SECONDS} s lang gemessen")
+            announce(tr("Antwort wird {sweep_answer_seconds} s lang gemessen", sweep_answer_seconds=SWEEP_ANSWER_SECONDS))
             answer = run_speedtest(url, "sweep", api_key, lambda piece: None, cancel, SWEEP_ANSWER_SECONDS)
             if answer is None:
                 return point
@@ -2327,7 +2409,7 @@ class App(tk.Tk):
             if answer["draft_n"]:
                 point["draft"] = round(100 * answer["draft_accepted"] / answer["draft_n"])
             if repeat:
-                announce(f"Wiederholter Text wird {SWEEP_ANSWER_SECONDS} s lang gemessen")
+                announce(tr("Wiederholter Text wird {sweep_answer_seconds} s lang gemessen", sweep_answer_seconds=SWEEP_ANSWER_SECONDS))
                 copied = run_repeat_test(url, "sweep", api_key, min(REPEAT_TEST_TOKENS, (point["ctx"] - PROMPT_TEST_RESERVE) // 2), cancel, SWEEP_ANSWER_SECONDS)
                 if copied is None:
                     return point
@@ -2355,8 +2437,8 @@ class App(tk.Tk):
         remaining = ""
         if done:
             minutes = sum(done) / len(done) * (total - index) / 60
-            remaining = f"   ·   noch etwa {max(1, round(minutes))} Min."
-        self.sweep_status.set(f"Punkt {index + 1} von {total}: {llama_plot.compact_tokens(context)} Kontext, {phase}{remaining}")
+            remaining = tr("   ·   noch etwa {value} Min.", value=max(1, round(minutes)))
+        self.sweep_status.set(tr("Punkt {value} von {total}: {context} Kontext, {phase}{remaining}", value=index + 1, total=total, context=llama_plot.compact_tokens(context), phase=phase, remaining=remaining))
 
     def _on_sweep_point(self, point, done):
         """Jeder Punkt wird sofort gesichert, damit ein Abbruch oder Absturz nichts kostet."""
@@ -2366,7 +2448,7 @@ class App(tk.Tk):
         sweep["points"].append(point)
         self.sweep_bar.configure(value=done)
         if point.get("error"):
-            self._log_app(f"Kontext {point['requested']}: {point['error']}")
+            self._log_app(tr("Kontext {requested}: {error}", requested=point['requested'], error=point['error']))
         self._store_sweep(sweep)
         if self.sweep_shown is sweep:
             self._fill_sweep_table(sweep)
@@ -2376,9 +2458,9 @@ class App(tk.Tk):
         sweep = self.sweep_current
         self.sweep_current = None
         self.sweep_cancel = None
-        self.sweep_button.configure(text="Kontext-Test starten", state="normal")
+        self.sweep_button.configure(text=tr("Kontext-Test starten"), state="normal")
         self.start_button.configure(state="normal")
-        self._set_status("Gestoppt", "#888888")
+        self._set_status(tr("Gestoppt"), "#888888")
         if sweep:
             sweep["complete"] = len(sweep["points"]) == len(sweep["contexts"])
             if sweep["points"]:
@@ -2386,13 +2468,13 @@ class App(tk.Tk):
                 if self.sweep_shown is sweep:
                     self._draw_sweep()
                 measured = sum(1 for p in sweep["points"] if p["state"] == "OK")
-                prefix = "Abgebrochen" if cancelled else "Fertig"
-                self.sweep_status.set(f"{prefix}: {measured} von {len(sweep['contexts'])} Punkten gemessen. Gespeichert als {Path(sweep['image']).name}")
-                self._log_app(f"Kontext-Test gespeichert: {sweep['image']}")
+                prefix = tr("Abgebrochen") if cancelled else tr("Fertig")
+                self.sweep_status.set(tr("{prefix}: {measured} von {count} Punkten gemessen. Gespeichert als {name}", prefix=prefix, measured=measured, count=len(sweep['contexts']), name=Path(sweep['image']).name))
+                self._log_app(tr("Kontext-Test gespeichert: {image}", image=sweep['image']))
             else:
                 self.sweep_shown = self._saved_sweeps()[-1] if self._saved_sweeps() else None
                 self._refresh_saved_sweeps()
-                self.sweep_status.set("Abgebrochen, bevor ein Punkt fertig war.")
+                self.sweep_status.set(tr("Abgebrochen, bevor ein Punkt fertig war."))
                 self._fill_sweep_table(self.sweep_shown)
                 self._draw_sweep()
         self._detect_devices()
@@ -2411,7 +2493,7 @@ class App(tk.Tk):
         try:
             self._save_config()
         except OSError as err:
-            self._log_app(f"Konfiguration nicht gespeichert: {err}")
+            self._log_app(tr("Konfiguration nicht gespeichert: {err}", err=err))
         self._save_sweep_image(sweep)
         self._refresh_saved_sweeps()
 
@@ -2421,14 +2503,14 @@ class App(tk.Tk):
             image.parent.mkdir(parents=True, exist_ok=True)
             llama_plot.save_png(sweep, image)
         except ImportError:
-            self._log_app("Für das Bild fehlt matplotlib: py -m pip install matplotlib. Die Messwerte sind trotzdem gespeichert.")
+            self._log_app(tr("Für das Bild fehlt matplotlib: py -m pip install matplotlib. Die Messwerte sind trotzdem gespeichert."))
         except (OSError, ValueError) as err:
-            self._log_app(f"Bild nicht gespeichert: {err}")
+            self._log_app(tr("Bild nicht gespeichert: {err}", err=err))
 
     @staticmethod
     def _sweep_label(sweep):
-        state = "" if sweep.get("complete") else "   (unvollständig)"
-        return f"{sweep['time']}   ·   {sweep['model']}   ·   {len(sweep['points'])} Punkte{state}"
+        state = "" if sweep.get("complete") else tr("   (unvollständig)")
+        return tr("{time}   ·   {model}   ·   {count} Punkte{state}", time=sweep['time'], model=sweep['model'], count=len(sweep['points']), state=state)
 
     def _refresh_saved_sweeps(self):
         saved = self._saved_sweeps()
@@ -2459,7 +2541,7 @@ class App(tk.Tk):
         if self.sweep_shown:  # Neu zeichnen, damit auch ältere Tests im aktuellen Stil erscheinen.
             self._save_sweep_image(self.sweep_shown)
         if not self.sweep_shown or not image.is_file():
-            messagebox.showinfo("Kontext-Test", "Für diese Auswahl gibt es noch kein Bild.")
+            messagebox.showinfo(tr("Kontext-Test"), tr("Für diese Auswahl gibt es noch kein Bild."))
             return
         os.startfile(image)
 
@@ -2467,13 +2549,13 @@ class App(tk.Tk):
         sweep = self.sweep_shown
         if not sweep or sweep is self.sweep_current or sweep not in self._saved_sweeps():
             return
-        if not messagebox.askokcancel("Kontext-Test löschen", f"{self._sweep_label(sweep)}\n\nMesswerte und Bild werden gelöscht."):
+        if not messagebox.askokcancel(tr("Kontext-Test löschen"), tr("{sweep_label}\n\nMesswerte und Bild werden gelöscht.", sweep_label=self._sweep_label(sweep))):
             return
         self._saved_sweeps().remove(sweep)
         try:
             Path(sweep["image"]).unlink(missing_ok=True)
         except OSError as err:
-            self._log_app(f"Bild nicht gelöscht: {err}")
+            self._log_app(tr("Bild nicht gelöscht: {err}", err=err))
         self._save_config()
         self.sweep_shown = None
         self._refresh_saved_sweeps()
@@ -2488,8 +2570,8 @@ class App(tk.Tk):
         except ImportError:
             self.sweep_figure = False
             ttk.Label(self.sweep_plot, justify="left", text=(
-                "Für den Plot fehlt matplotlib. Die Messung läuft trotzdem, und die Werte stehen in der Tabelle.\n"
-                "Installieren mit: py -m pip install matplotlib")).pack(anchor="nw")
+                tr("Für den Plot fehlt matplotlib. Die Messung läuft trotzdem, und die Werte stehen in der Tabelle.\n"
+                "Installieren mit: py -m pip install matplotlib"))).pack(anchor="nw")
             return
         self.sweep_figure = Figure(layout="constrained", dpi=96)
         self.sweep_canvas = FigureCanvasTkAgg(self.sweep_figure, master=self.sweep_plot)
@@ -2500,7 +2582,7 @@ class App(tk.Tk):
     def _draw_sweep(self):
         if not self.sweep_canvas:
             return
-        sweep = self.sweep_shown or {"points": [], "model": "Noch kein Test gespeichert", "time": "", "complete": True}
+        sweep = self.sweep_shown or {"points": [], "model": tr("Noch kein Test gespeichert"), "time": "", "complete": True}
         self.sweep_axes = llama_plot.draw_sweep(self.sweep_figure, sweep, compact=True)
         self.sweep_hover = None
         self.sweep_canvas.draw_idle()
@@ -2525,13 +2607,13 @@ class App(tk.Tk):
         pixel = lambda point: top.transData.transform((point["ctx"], 1))[0]
         nearest = min(measured, key=lambda point: abs(pixel(point) - event.x))
         self._hide_sweep_hover()
-        lines = [f"Kontext {llama_plot.german_number(nearest['ctx'], 0)}"]
+        lines = [tr("Kontext {ctx}", ctx=llama_plot.format_number(nearest['ctx'], 0))]
         if nearest.get("prompt_tps"):
-            lines.append(f"Prompt {llama_plot.german_number(nearest['prompt_tps'])} Tok/s")
+            lines.append(tr("Prompt {prompt_tps} Tok/s", prompt_tps=llama_plot.format_number(nearest['prompt_tps'])))
         if nearest.get("tps"):
-            lines.append(f"Antwort {llama_plot.german_number(nearest['tps'])} Tok/s")
+            lines.append(tr("Antwort {tps} Tok/s", tps=llama_plot.format_number(nearest['tps'])))
         if nearest.get("vram"):
-            lines.append(f"VRAM {llama_plot.german_number(nearest['vram'], 0)} MiB")
+            lines.append(tr("VRAM {vram} MiB", vram=llama_plot.format_number(nearest['vram'], 0)))
         if nearest.get("error"):
             lines.append(nearest["error"][:60])
         guides = [axis.axvline(nearest["ctx"], color=llama_plot.TEXT_SECONDARY, linewidth=1, zorder=2) for axis in (top, axes["answer"])]
@@ -2595,19 +2677,19 @@ class App(tk.Tk):
         if self.speed_cancel:
             self.speed_cancel.set()
         if self.optimize_window is not None:
-            if not messagebox.askokcancel("Beenden", "Das Optimieren läuft noch. Fertige Messungen und Diagramme bleiben gespeichert."):
+            if not messagebox.askokcancel(tr("Beenden"), tr("Das Optimieren läuft noch. Fertige Messungen und Diagramme bleiben gespeichert.")):
                 return
             self.optimize_restart = False
             self.optimize_window.close(force=True)
         if self.sweep_cancel:
-            if not messagebox.askokcancel("Beenden", "Der Kontext-Test läuft noch. Die fertigen Messpunkte bleiben gespeichert."):
+            if not messagebox.askokcancel(tr("Beenden"), tr("Der Kontext-Test läuft noch. Die fertigen Messpunkte bleiben gespeichert.")):
                 return
             self.sweep_cancel.set()
             self.sweep_restart = False
             if self.sweep_proc and self.sweep_proc.poll() is None:
                 self.sweep_proc.terminate()
         if self.proc:
-            if not messagebox.askokcancel("Beenden", "Der Server läuft noch und wird beim Schließen beendet."):
+            if not messagebox.askokcancel(tr("Beenden"), tr("Der Server läuft noch und wird beim Schließen beendet.")):
                 return
             self.proc.terminate()
             try:
@@ -2617,6 +2699,23 @@ class App(tk.Tk):
         self._save_config()
         self.after_cancel(self._pump_id)
         self.destroy()
+        self.closed = True
+
+    def _change_language(self):
+        """Die Sprache steht beim Programmstart fest (siehe llama_lang), deshalb wird sie gespeichert und das Programm neu gestartet."""
+        code = next(key for key, name in self.language_names.items() if name == self.language_var.get())
+        self.config_data["language"] = code
+        self._save_config()
+        if code == llama_lang.current:
+            return
+        question = llama_lang.tr_in(code, "Die Sprache ändert sich beim nächsten Start. Jetzt neu starten?")
+        if messagebox.askyesno("NoProbLlama", question, parent=self):
+            self.restart()
+
+    def restart(self):
+        self.on_close()
+        if self.closed:  # Beim Schließen lässt sich noch abbrechen, etwa wegen eines laufenden Tests.
+            subprocess.Popen([sys.executable, str(Path(__file__).resolve())], cwd=str(Path(__file__).parent))
 
 
 def main():

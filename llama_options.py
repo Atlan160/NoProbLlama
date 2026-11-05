@@ -4,7 +4,9 @@ speed, quality und memory bewerten, wie stark eine Einstellung wirken kann:
 0 = keine, 1 = gering, 2 = mittel, 3 = groß. Es sind Richtwerte, keine Messungen für jedes Modell.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+
+from llama_lang import tr
 
 INT = r"-?\d+"
 FLOAT = r"-?\d+(\.\d+)?"
@@ -35,9 +37,13 @@ class Opt:
     tip: str = ""
 
 
+TEXT_FIELDS = ("label", "hint", "what", "default", "speed_note", "quality_note", "memory_note", "tip")
+
+
 def _by_impact(opts):
-    """Sortiert so, dass die wirkungsvollsten Einstellungen oben stehen."""
-    return sorted(opts, key=lambda o: (-max(o.speed, o.quality), -o.memory))
+    """Sortiert so, dass die wirkungsvollsten Einstellungen oben stehen, und übersetzt die Texte."""
+    ordered = sorted(opts, key=lambda o: (-max(o.speed, o.quality), -o.memory))
+    return [replace(o, **{name: tr(getattr(o, name)) for name in TEXT_FIELDS}) for o in ordered]
 
 
 _START = [
@@ -82,7 +88,7 @@ _START = [
         values=("", "auto", "none", "draft-mtp", "draft-mtp,ngram-mod", "draft-simple", "draft-dflash", "draft-eagle3",
                 "draft-dspark", "ngram-mod", "ngram-simple", "ngram-map-k", "ngram-map-k4v", "ngram-cache"),
         speed=3, memory=1,
-        speed_note="Keine Einstellung lohnt sich für jedes Modell. Gemessen auf der RTX 4070 als neuer / wiederholter Text in "
+        speed_note="Keine Einstellung lohnt sich für jedes Modell. Gemessen auf einer RTX 4070 als neuer / wiederholter Text in "
                    "Tok/s. Hermes 8B: ohne 68 / 66, ngram-simple 68 / 123. Qwen3.8 IQ3: ohne 17 / 17, ngram-mod 17 / 73, "
                    "draft-mtp 11 / 19, beides 11 / 58. Qwen3.8 Q4, großteils auf der CPU: ohne 5,3 / 5,2, draft-mtp 8,9 / 15,6. "
                    "Qwen3.6 MoE: ohne 41 / 46, ngram-simple 41 / 39. N-Gram kostet bei neuem Text also nichts, bremst aber "
@@ -147,7 +153,7 @@ _GPU = [
         "MoE-Modelle bestehen aus immer aktiven Teilen und vielen Experten, von denen pro Token nur wenige rechnen. Diese Option "
         "legt alle Experten in den RAM. Attention, Router und die übrigen immer aktiven Teile bleiben auf der GPU.",
         kind="flag", default="aus", speed=3, memory=3,
-        speed_note="Gemessen mit Qwen3.6-35B-A3B auf der RTX 4070: 32 Tok/s mit nur rund 3 GB VRAM. Das ist deutlich mehr als "
+        speed_note="Gemessen mit Qwen3.6-35B-A3B auf einer RTX 4070: 32 Tok/s mit nur rund 3 GB VRAM. Das ist deutlich mehr als "
                    "--fit allein mit 20 Tok/s, aber weniger als -ncmoe 30 mit 41 Tok/s.",
         quality_note="Keine Wirkung, es ändert nur den Ablageort.",
         memory_note="Spart sehr viel VRAM. Der RAM muss dafür alle Experten aufnehmen, grob die Dateigröße des Modells.",
@@ -158,7 +164,7 @@ _GPU = [
         "Feinere Variante von -cmoe. Die Zahl sagt, bei wie vielen Layern die Experten in den RAM wandern, gezählt ab dem ersten "
         "Layer. Die Experten der übrigen Layer und alle immer aktiven Teile bleiben auf der GPU.",
         pattern=INT, speed=3, memory=3,
-        speed_note="Gemessen mit Qwen3.6-35B-A3B auf der RTX 4070 (40 Layer, 630 MiB pro Layer): 34 ergibt 36 Tok/s, 32 ergibt 38 "
+        speed_note="Gemessen mit Qwen3.6-35B-A3B auf einer RTX 4070 (40 Layer, 630 MiB pro Layer): 34 ergibt 36 Tok/s, 32 ergibt 38 "
                    "und 30 ergibt 41, jeweils mit 1024 MiB Fit-Reserve. Darunter kommt der Einbruch: 28 fällt mit dieser Reserve auf 21 Tok/s, mit -fit off "
                    "erreicht es 45. Bei 26 sind es auch mit -fit off nur noch 21 Tok/s, weil der VRAM überläuft.",
         quality_note="Keine Wirkung, es ändert nur den Ablageort.",
@@ -167,12 +173,12 @@ _GPU = [
             "senken und --fit ausschalten, dann im Speedtest prüfen. Bricht das Tempo ein, zurück zum vorherigen Wert. Andere "
             "Programme und ein größerer Kontext verringern den Platz."),
     Opt("moe_cache", "--moe-cache-mib", "MoE: Experten-Cache (MiB)",
-        "Nur MoE-Modelle: Eingabe in MiB. Auf deiner RTX 4070 brachte er keinen Vorteil, kleine Werte machten sogar langsamer. Im Zweifel leer lassen.",
+        "Nur MoE-Modelle: Eingabe in MiB. Auf einer RTX 4070 brachte er keinen Vorteil, kleine Werte machten sogar langsamer. Im Zweifel leer lassen.",
         "Ein Zwischenspeicher im VRAM für Experten, die im RAM liegen. Häufig genutzte Experten bleiben dort, selten genutzte "
         "werden verdrängt. Er arbeitet nur bei Batches bis 32 Tokens, wirkt also auf die Antwort, kaum auf lange Prompts. "
         "Aktuell nur mit einem einzelnen Gerät.",
         pattern=INT, default="0 = aus", speed=2, memory=2,
-        speed_note="Gemessen mit Qwen3.6-35B-A3B auf der RTX 4070, zusammen mit -cmoe: 1000 MiB ergeben 14 Tok/s, 2520 MiB 20, "
+        speed_note="Gemessen mit Qwen3.6-35B-A3B auf einer RTX 4070, zusammen mit -cmoe: 1000 MiB ergeben 14 Tok/s, 2520 MiB 20, "
                    "4000 MiB 25, 6000 MiB schwankend 31 bis 47 und 7500 MiB 37. Ohne Cache sind es 32, mit -ncmoe 30 ohne Cache "
                    "41 Tok/s. Zu kleine Caches bremsen, weil ständig Experten über PCIe nachgeladen werden. Auf großen Karten mit "
                    "viel größeren Modellen maßen die Entwickler dagegen bis zu 2,2-fache Geschwindigkeit (PR #29887).",
@@ -207,7 +213,7 @@ _GPU = [
         speed_note="Von 1024 auf 256 stehen dem Modell 768 MiB mehr zur Verfügung. Das lohnt sich, wenn ihm nur wenige Layer zum "
                    "vollständigen Platz auf der GPU fehlen.",
         memory_note="Browser und Desktop belegen ebenfalls VRAM. Wird die Reserve zu klein, drohen Abstürze oder Auslagerung.",
-        tip="256 hat sich auf deiner RTX 4070 bewährt. Erhöhe auf 512 oder 1024, wenn das Tempo plötzlich einbricht oder wenn "
+        tip="256 hat sich auf einer RTX 4070 bewährt. Erhöhe auf 512 oder 1024, wenn das Tempo plötzlich einbricht oder wenn "
             "nebenbei Programme mit viel VRAM-Bedarf laufen, etwa Spiele oder Videoschnitt."),
     Opt("fit_ctx", "-fitc", "Fit: Mindestkontext",
         "Untergrenze für den automatisch gewählten Kontext. Wirkt nur, wenn die Kontextgröße leer ist.",
@@ -223,7 +229,7 @@ _GPU = [
         speed_note="Wirkt indirekt: Der gesparte VRAM lässt mehr Kontext oder Layer auf der GPU zu.",
         quality_note="q8_0 gilt als unkritisch, stärkere Typen können lange Kontexte ungenauer machen.",
         memory_note="q8_0 braucht für K etwa die Hälfte von f16, q4_0 etwa ein Viertel.",
-        tip="Zuerst K auf q8_0 und V auf q4_0 testen, das nutzt die Modellkarte deines Qwen3.8 für ihre Messungen."),
+        tip="Zuerst K auf q8_0 und V auf q4_0 testen, das nutzt die Modellkarte von Qwen3.8 für ihre Messungen."),
     Opt("cache_v", "-ctv", "KV-Cache-Typ V",
         "Bei langem Kontext: q4_0 spart viel VRAM. Stärker am Ergebnis beteiligt als K, deshalb Antworten kurz prüfen.",
         "Datentyp der V-Werte im KV-Cache. Spart wie -ctk Speicher, gegen etwas geringere Genauigkeit.",
@@ -639,11 +645,11 @@ _CHAT = [
 ]
 
 TABS = {
-    "Start": _by_impact(_START),
-    "GPU & Speicher": _by_impact(_GPU),
-    "Draft-Modell & N-Gram": _by_impact(_DRAFT),
-    "Sampling": _by_impact(_SAMPLING),
-    "Chat & Server": _by_impact(_CHAT),
+    tr("Start"): _by_impact(_START),
+    tr("GPU & Speicher"): _by_impact(_GPU),
+    tr("Draft-Modell & N-Gram"): _by_impact(_DRAFT),
+    tr("Sampling"): _by_impact(_SAMPLING),
+    tr("Chat & Server"): _by_impact(_CHAT),
 }
 ALL_OPTS = [opt for opts in TABS.values() for opt in opts]
 DEFAULTS = {"ctx_size": "32768", "spec_type": "auto", "fit_target": "256", "host": "127.0.0.1", "port": "8080"}

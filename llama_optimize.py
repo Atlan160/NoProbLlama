@@ -10,6 +10,7 @@ from pathlib import Path
 from tkinter import messagebox, ttk
 
 import llama_plot
+from llama_lang import tr
 
 CONTEXT_TOLERANCE = 0.95  # So viel vom besten Antworttempo muss eine Kontextgröße halten, damit sie als verlustfrei gilt.
 CONTEXT_PROMPT_TOLERANCE = 0.85
@@ -34,34 +35,31 @@ RANGE_POINTS = 7
 RANGE_MIN_STEP = 1.05
 MIN_CONTEXT = 1024
 FULL_PROMPT_CONTEXT = 8448  # Ab hier passt der ganze Einlese-Prompt. Darunter wird er kürzer und das gemessene Tempo weniger vergleichbar.
-CONTEXT_MIN_GAP = 0.1  # Kontexte, die so dicht am gewählten liegen, zeigen nichts Neues und überdecken sich im Diagramm.
 
 TEXTS = {
-    "context": ("Kontextgröße", "-c", "Misst das Tempo bei verschiedenen Kontextgrößen. Wähle danach die Größe, die du nutzen möchtest."),
-    "range": ("Kontextgröße", "-c", "Wähle den Bereich, in dem gemessen werden soll. Dazwischen verteilt das Programm 7 Messpunkte."),
-    "ncmoe": ("MoE-Experten", "-ncmoe", "Sucht, wie viele Expertenschichten in den RAM sollten. Der beste Wert wird automatisch gewählt."),
-    "ub": ("Micro-Batch", "-ub", "Sucht das schnellste Einlesen, ohne dass das Antworttempo leidet. Der beste Wert wird automatisch gewählt."),
-    "spec": ("Spekulation", "--spec-type", "Misst neuen und wiederholten Text. Gewählt wird das Schnellste bei wiederholtem Text, das neuen Text höchstens 5 % kostet."),
-    "gate": ("Qualität", "", ""),
-    "ctk": ("KV-Cache K", "-ctk", "Kann die Qualität beeinflussen. Wähle den Typ, den du nutzen möchtest."),
-    "ctv": ("KV-Cache V", "-ctv", "Kann die Qualität beeinflussen. Wähle den Typ, den du nutzen möchtest."),
-    "c": ("Kontext erneut", "-c", "Kann die Qualität beeinflussen, weil das Modell weniger sieht, wenn der Kontext kleiner wird. Wähle die Größe, die du nutzen möchtest."),
-    "final": ("Ergebnis", "", "Misst die gewählte Kombination und vergleicht sie mit dem Ausgangspunkt."),
+    "context": (tr("Kontextgröße"), "-c", tr("Misst das Tempo bei verschiedenen Kontextgrößen. Wähle danach die Größe, die du nutzen möchtest.")),
+    "range": (tr("Kontextgröße"), "-c", tr("Wähle den Bereich, in dem gemessen werden soll. Dazwischen verteilt das Programm 7 Messpunkte.")),
+    "ncmoe": (tr("MoE-Experten"), "-ncmoe", tr("Sucht, wie viele Expertenschichten in den RAM sollten. Der beste Wert wird automatisch gewählt.")),
+    "ub": (tr("Micro-Batch"), "-ub", tr("Sucht das schnellste Einlesen, ohne dass das Antworttempo leidet. Der beste Wert wird automatisch gewählt.")),
+    "spec": (tr("Spekulation"), "--spec-type", tr("Misst neuen und wiederholten Text. Gewählt wird das Schnellste bei wiederholtem Text, das neuen Text höchstens 5 % kostet.")),
+    "gate": (tr("Qualität"), "", ""),
+    "ctk": (tr("KV-Cache K"), "-ctk", tr("Kann die Qualität beeinflussen. Wähle den Typ, den du nutzen möchtest.")),
+    "ctv": (tr("KV-Cache V"), "-ctv", tr("Kann die Qualität beeinflussen. Wähle den Typ, den du nutzen möchtest.")),
+    "result": (tr("Ergebnis"), "-c", tr("Misst alle Kontextgrößen mit den gewählten Einstellungen und vergleicht sie mit der Messung vom Anfang. Wähle rechts die Größe, die du nutzen möchtest.")),
 }
 MEANINGS = {
-    "context": "Wie viele Tokens das Modell gleichzeitig sehen kann: Verlauf, Dateien und die aktuelle Antwort.",
-    "ncmoe": "Bei wie vielen Schichten die Experten im RAM liegen. Die übrigen rechnen schneller im VRAM.",
-    "ub": "Wie viele Tokens auf einmal berechnet werden. Mehr liest lange Prompts schneller ein, braucht aber VRAM.",
-    "spec": "Sagt die nächsten Tokens voraus und lässt das Modell sie gemeinsam prüfen. Das beschleunigt wiederholten Text.",
-    "gate": "Freiwillig: Die folgenden Parameter können die Antworten verändern.",
-    "ctk": "Datentyp der K-Werte im Kontextspeicher. Kleinere Typen sparen VRAM, sind aber ungenauer.",
-    "ctv": "Datentyp der V-Werte im Kontextspeicher. Sie wirken stärker auf das Ergebnis als die K-Werte.",
-    "c": "Kontextgröße mit den gewählten Typen: Kleinere Typen schaffen oft Platz für mehr Tokens.",
-    "final": "Misst die gewählte Kombination und vergleicht sie mit dem Ausgangspunkt.",
+    "context": tr("Wie viele Tokens das Modell gleichzeitig sehen kann: Verlauf, Dateien und die aktuelle Antwort."),
+    "ncmoe": tr("Bei wie vielen Schichten die Experten im RAM liegen. Die übrigen rechnen schneller im VRAM."),
+    "ub": tr("Wie viele Tokens auf einmal berechnet werden. Mehr liest lange Prompts schneller ein, braucht aber VRAM."),
+    "spec": tr("Sagt die nächsten Tokens voraus und lässt das Modell sie gemeinsam prüfen. Das beschleunigt wiederholten Text."),
+    "gate": tr("Freiwillig: Die folgenden Parameter können die Antworten verändern."),
+    "ctk": tr("Datentyp der K-Werte im Kontextspeicher. Kleinere Typen sparen VRAM, sind aber ungenauer."),
+    "ctv": tr("Datentyp der V-Werte im Kontextspeicher. Sie wirken stärker auf das Ergebnis als die K-Werte."),
+    "result": tr("Misst alle Kontextgrößen noch einmal mit den gewählten Einstellungen und vergleicht sie mit dem Anfang."),
 }
-QUALITY_STEPS = ("ctk", "ctv", "c")
-SWEEP_STEPS = ("context", "c")
-CHOICE_STEPS = ("context", "ctk", "ctv", "c")
+QUALITY_STEPS = ("ctk", "ctv")
+SWEEP_STEPS = ("context", "result")
+CHOICE_STEPS = ("context", "ctk", "ctv", "result")
 
 
 def ok_points(points):
@@ -126,7 +124,7 @@ def parse_tokens(text):
     """Liest eine Kontextgröße wie 32768, 32.768 oder 32k. Wirft ValueError, wenn das nicht geht."""
     match = re.fullmatch(r"(\d[\d.]*)\s*([kK]?)", text.strip())
     if not match:
-        raise ValueError(f"„{text.strip()}“ ist keine Kontextgröße. Beispiele: 16k, 32768, 260k.")
+        raise ValueError(tr("„{strip}“ ist keine Kontextgröße. Beispiele: 16k, 32768, 260k.", strip=text.strip()))
     return int(match.group(1).replace(".", "")) * (1024 if match.group(2) else 1)
 
 
@@ -134,15 +132,15 @@ def read_range(low_text, high_text, trained):
     """Prüft den Kontext-Bereich gegen das Modell. Liefert (von, bis, Hinweis). Liegt „bis“ darüber, gilt das Maximum des Modells."""
     low, high = parse_tokens(low_text), parse_tokens(high_text)
     if low < MIN_CONTEXT:
-        raise ValueError(f"Der Kontext muss mindestens {llama_plot.german_number(MIN_CONTEXT, 0)} Tokens groß sein.")
+        raise ValueError(tr("Der Kontext muss mindestens {min_context} Tokens groß sein.", min_context=llama_plot.format_number(MIN_CONTEXT, 0)))
     if trained and low >= trained:
-        raise ValueError(f"„Von“ muss unter dem Maximum dieses Modells von {llama_plot.german_number(trained, 0)} Tokens liegen.")
+        raise ValueError(tr("„Von“ muss unter dem Maximum dieses Modells von {trained} Tokens liegen.", trained=llama_plot.format_number(trained, 0)))
     note = ""
     if trained and high > trained:
         high = trained
-        note = f"Das Modell unterstützt höchstens {llama_plot.german_number(trained, 0)} Tokens, deshalb wird nur bis dahin gemessen."
+        note = tr("Das Modell unterstützt höchstens {trained} Tokens, deshalb wird nur bis dahin gemessen.", trained=llama_plot.format_number(trained, 0))
     if high <= low:
-        raise ValueError("„Bis“ muss größer sein als „Von“.")
+        raise ValueError(tr("„Bis“ muss größer sein als „Von“."))
     return low, high, note
 
 
@@ -175,7 +173,7 @@ def repeat_lines(target):
 
 
 class OptimizeWindow(tk.Toplevel):
-    def __init__(self, app, exe, model, info, values, free, folder):
+    def __init__(self, app, exe, model, info, values, free, folder, resume=None):
         super().__init__(app)
         self.app = app
         self.exe = exe
@@ -185,7 +183,7 @@ class OptimizeWindow(tk.Toplevel):
         self.current = dict(values)
         self.free = free
         self.folder = Path(folder)
-        self.stamp = time.strftime("%d.%m.%Y %H:%M")
+        self.stamp = time.strftime(tr("%d.%m.%Y %H:%M"))
         self.cancel = None
         self.running = False
         self.steps = []
@@ -199,21 +197,72 @@ class OptimizeWindow(tk.Toplevel):
         self.measure_total = 0
         self.aborted = False
         self.final_changed = False
-        self.final_result = None
         self.final_backup = None
         self.range = None
         self.range_default = app.optimize_range_default(self.current)
-        self.title(f"Modell optimieren: {model.stem}")
+        self.title(tr("Modell optimieren: {stem}", stem=model.stem))
         self.geometry(f"{min(WINDOW_WIDTH, self.winfo_screenwidth() - 40)}x{min(WINDOW_HEIGHT, self.winfo_screenheight() - 80)}")  # So breit, dass die Balkenbeschriftungen lesbar sind.
         self.minsize(1000, 780)  # Darunter passen nicht mehr alle Schritte samt Erklärung in die linke Liste.
         self.transient(app)
         self.protocol("WM_DELETE_WINDOW", self.close)
         self._build()
-        for key in ("context", "ncmoe", "ub", "spec", "gate", "final"):
+        if resume:
+            self._restore(resume)
+            return
+        for key in ("context", "ncmoe", "ub", "spec", "gate", "result"):
             if key != "ncmoe" or info.get("experts"):  # Normale Modelle haben keine Experten, die sich verteilen ließen.
                 self.steps.append(self._new_step(key))
         self._refresh_list()
         self._begin(self.steps[0])
+
+    def _restore(self, report):
+        """Setzt einen gespeicherten Lauf fort. Fertige Schritte bleiben, ein abgebrochener Schritt beginnt von vorn.
+        Ältere Läufe enthalten noch „Kontext erneut“ und das alte Ergebnis. Beides misst das neue Ergebnis ohnehin neu."""
+        saved = {step["key"]: step for step in report.get("steps", [])}
+        self.start_values.update(report.get("start") or {})
+        self.current.update(report.get("current") or {})
+        self.stamp = report.get("time") or self.stamp
+        self.saved_profile = report.get("profile") or ""
+        later = any(key in saved for key in ("ctk", "ctv", "c", "final", "result"))
+        for key in ("context", "ncmoe", "ub", "spec", "gate", "ctk", "ctv", "result"):
+            if key == "ncmoe" and not self.info.get("experts"):
+                continue
+            if key in QUALITY_STEPS and key not in saved:
+                continue
+            step = self._new_step(key)
+            data = saved.get(key)
+            if data:
+                step.update({name: data[name] for name in ("points", "selected", "done", "skipped", "image") if name in data})
+            elif key == "gate" and later:  # Der Qualitätsschritt hat selbst keine Messwerte und steht in älteren Läufen nicht in der Datei.
+                step["done"] = True
+                step["skipped"] = not any(name in saved for name in QUALITY_STEPS)
+            self.steps.append(step)
+        context = self.steps[0]
+        requested = [point["requested"] for point in context["points"]]
+        self.range = (min(requested), max(requested))
+        sweeps = self.app._saved_sweeps()
+        for step in self.steps:
+            if step["key"] not in SWEEP_STEPS or not step["points"]:
+                continue
+            sweep = next((item for item in sweeps if item.get("image") == step["image"]), None)
+            if sweep is None:
+                sweep = {"time": self.stamp, "model": self.model.stem, "settings": self.app.optimize_describe(self.current), "fit_limit": self.app.optimize_limit(self.current),
+                         "free": self.free, "contexts": sorted(point["requested"] for point in step["points"]), "complete": True, "image": step["image"]}
+            sweep["points"] = step["points"]  # Dieselbe Liste wie im Schritt, damit Nachmessungen in beiden erscheinen.
+            if step["key"] == "result":
+                sweep["baseline"] = context["points"]
+            step["sweep"] = sweep
+        self.app._log_app(tr("Optimieren: Lauf vom {time} wird fortgesetzt.", time=self.stamp))
+        self._refresh_list()
+        waiting = next((step for step in self.steps if not step["done"]), None)
+        if waiting is None:  # Alles war schon fertig gemessen: Es geht beim Ergebnis weiter, dort lässt sich wählen und speichern.
+            self.step = self.steps[-1]
+            self._finish_context(self.steps[-1])
+            return
+        waiting.update(points=[], selected=None, skipped=False)
+        waiting.pop("sweep", None)
+        self.status_var.set(tr("Lauf vom {time} fortgesetzt. Die gemessenen Schritte bleiben.", time=self.stamp))
+        self._begin(waiting)
 
     # ---------- Aufbau ----------
 
@@ -222,7 +271,7 @@ class OptimizeWindow(tk.Toplevel):
         self.rowconfigure(0, weight=1)
         side = ttk.Frame(self, padding=(10, 10, 6, 10))
         side.grid(row=0, column=0, sticky="ns")
-        ttk.Label(side, text="Schritte", style="Head.TLabel").pack(anchor="w")
+        ttk.Label(side, text=tr("Schritte"), style="Head.TLabel").pack(anchor="w")
         self.step_list = tk.Frame(side, background=LIST_BACKGROUND, width=SIDE_WIDTH)
         self.step_list.pack(fill="y", expand=True, pady=(4, 0))
         self.step_list.pack_propagate(False)
@@ -245,21 +294,21 @@ class OptimizeWindow(tk.Toplevel):
         self._build_range_page()
         self._build_measure_page()
         self._build_gate_page()
-        self._build_final_page()
+        self._build_finish(main)
 
         status = ttk.Frame(main)
-        status.grid(row=3, column=0, sticky="ew", pady=(8, 0))
+        status.grid(row=4, column=0, sticky="ew", pady=(8, 0))
         self.bar = ttk.Progressbar(status, length=170)
         self.bar.pack(side="left")
         self.status_var = tk.StringVar()
         ttk.Label(status, textvariable=self.status_var).pack(side="left", padx=(10, 0))
 
         nav = ttk.Frame(main)
-        nav.grid(row=4, column=0, sticky="ew", pady=(8, 0))
-        self.abort_button = ttk.Button(nav, text="Abbrechen", style="Big.TButton", command=self.abort)
+        nav.grid(row=5, column=0, sticky="ew", pady=(8, 0))
+        self.abort_button = ttk.Button(nav, text=tr("Abbrechen"), style="Big.TButton", command=self.abort)
         self.abort_button.pack(side="left")
-        ttk.Button(nav, text="Diagramme öffnen", style="Big.TButton", command=self.open_folder).pack(side="left", padx=(6, 0))
-        self.next_button = ttk.Button(nav, text="Weiter", style="Big.TButton", command=self.next_step, state="disabled")
+        ttk.Button(nav, text=tr("Diagramme öffnen"), style="Big.TButton", command=self.open_folder).pack(side="left", padx=(6, 0))
+        self.next_button = ttk.Button(nav, text=tr("Weiter"), style="Big.TButton", command=self.next_step, state="disabled")
         self.next_button.pack(side="right")
 
     def _fit_text(self, width):
@@ -273,23 +322,23 @@ class OptimizeWindow(tk.Toplevel):
     def _build_range_page(self):
         self.range_page = page = ttk.Frame(self.body)
         low, high, _limit, trained = self.range_default
-        maximum = f"Dieses Modell unterstützt bis zu {llama_plot.german_number(trained, 0)} Tokens Kontext." if trained else "Die Modelldatei nennt keine Obergrenze für den Kontext."
+        maximum = tr("Dieses Modell unterstützt bis zu {trained} Tokens Kontext.", trained=llama_plot.format_number(trained, 0)) if trained else tr("Die Modelldatei nennt keine Obergrenze für den Kontext.")
         ttk.Label(page, text=maximum, font=("Segoe UI", 10, "bold")).pack(anchor="w")
         row = ttk.Frame(page)
         row.pack(anchor="w", pady=(10, 0))
         self.range_low_var = tk.StringVar(value=str(low))
         self.range_high_var = tk.StringVar(value=str(high))
-        for label, var in (("Von", self.range_low_var), ("Bis", self.range_high_var)):
+        for label, var in ((tr("Von"), self.range_low_var), (tr("Bis"), self.range_high_var)):
             ttk.Label(row, text=label).pack(side="left", padx=(0, 6))
             ttk.Entry(row, textvariable=var, width=12, font=("Segoe UI", 11)).pack(side="left", padx=(0, 16))
             var.trace_add("write", lambda *_: self._update_range())
-        ttk.Label(row, text="zum Beispiel 16k, 32768 oder 260k", style="Hint.TLabel").pack(side="left")
+        ttk.Label(row, text=tr("zum Beispiel 16k, 32768 oder 260k"), style="Hint.TLabel").pack(side="left")
         self.range_points_var = tk.StringVar()
         ttk.Label(page, textvariable=self.range_points_var, justify="left").pack(anchor="w", pady=(12, 0))
         self.range_note_var = tk.StringVar()
         self.range_note = ttk.Label(page, textvariable=self.range_note_var, justify="left", wraplength=800)
         self.range_note.pack(anchor="w", pady=(6, 0))
-        self.start_button = ttk.Button(page, text="Messung starten", style="Big.TButton", command=self.start_range)
+        self.start_button = ttk.Button(page, text=tr("Messung starten"), style="Big.TButton", command=self.start_range)
         self.start_button.pack(anchor="w", pady=(14, 0))
         self._update_range()
 
@@ -305,16 +354,17 @@ class OptimizeWindow(tk.Toplevel):
             self.start_button.configure(state="disabled")
             return None
         points = range_contexts(low, high, limit)
-        self.range_points_var.set("Messpunkte: " + ", ".join(llama_plot.compact_tokens(value) for value in points))
+        self.range_points_var.set(tr("Messpunkte: ") + ", ".join(llama_plot.compact_tokens(value) for value in points))
         notes = [note] if note else []
         if limit and low < limit < high:
-            notes.append(f"Laut Schätzung passt alles bis etwa {llama_plot.compact_tokens(limit)} in den VRAM. Dieser Wert ist als Messpunkt dabei.")
+            notes.append(tr("Laut Schätzung passt alles bis etwa {limit} in den VRAM. Dieser Wert ist als Messpunkt dabei.", limit=llama_plot.compact_tokens(limit)))
         elif limit and limit >= high:
-            notes.append("Laut Schätzung passt der ganze Bereich in den VRAM.")
+            notes.append(tr("Laut Schätzung passt der ganze Bereich in den VRAM."))
         elif limit is not None:
-            notes.append("Laut Schätzung passt schon der kleinste Wert nicht ganz in den VRAM.")
+            notes.append(tr("Laut Schätzung passt schon der kleinste Wert nicht ganz in den VRAM."))
         if low < FULL_PROMPT_CONTEXT:
-            notes.append(f"Unter {llama_plot.german_number(FULL_PROMPT_CONTEXT, 0)} Tokens wird der Prompt beim Einlesen kürzer. Diese Werte sind nicht ganz vergleichbar.")
+            notes.append(tr("Unter {full_prompt_context} Tokens wird der Prompt beim Einlesen kürzer. Diese Werte sind nicht "
+                "ganz vergleichbar.", full_prompt_context=llama_plot.format_number(FULL_PROMPT_CONTEXT, 0)))
         self.range_note_var.set("\n".join(notes))
         self.range_note.configure(foreground="#b35900" if note else "")
         self.start_button.configure(state="normal")
@@ -332,7 +382,7 @@ class OptimizeWindow(tk.Toplevel):
         page.rowconfigure(0, weight=1)
         self.plot = ttk.Frame(page)
         self.plot.grid(row=0, column=0, sticky="nsew")
-        columns = {"value": ("Wert", 160), "prompt_tps": ("Prompt Tok/s", 84), "tps": ("Tok/s", 52), "repeat_tps": ("Wiederholt", 72), "vram": ("VRAM MiB", 66), "state": ("Status", 54)}
+        columns = {"value": (tr("Wert"), 160), "prompt_tps": (tr("Prompt Tok/s"), 84), "tps": ("Tok/s", 52), "repeat_tps": (tr("Wiederholt"), 72), "vram": (tr("VRAM MiB"), 66), "state": (tr("Status"), 54)}
         table = ttk.Frame(page)
         table.grid(row=0, column=1, sticky="ns", padx=(8, 0))
         table.rowconfigure(1, weight=1)
@@ -345,62 +395,58 @@ class OptimizeWindow(tk.Toplevel):
         self.table.bind("<<TreeviewSelect>>", lambda _: self._on_table_pick())
         self.table.tag_configure("best", font=("Segoe UI", 9, "bold"))
         ttk.Label(table, textvariable=self.pick_var, wraplength=440, justify="left").grid(row=2, column=0, sticky="w", pady=(6, 0))
-        self.redo_button = ttk.Button(table, text="Ab hier neu messen", style="Big.TButton", command=self.redo_from_shown)
+        self.redo_button = ttk.Button(table, text=tr("Ab hier neu messen"), style="Big.TButton", command=self.redo_from_shown)
         self.redo_button.grid(row=3, column=0, sticky="w", pady=(8, 0))
         self.redo_button.grid_remove()
+        self.params = ttk.Frame(table)
+        self.params.grid(row=4, column=0, sticky="w", pady=(14, 0))
+        self.params.grid_remove()
         self._ensure_canvas()
 
     def _build_gate_page(self):
         self.gate_page = page = ttk.Frame(self.body)
         self.gate_warning = warning = tk.Label(page, background=PANEL_BACKGROUND, justify="left", anchor="w", wraplength=640, padx=12, pady=10, font=("Segoe UI", 10),
-                                               text="Achtung: Die nächsten Parameter können die Qualität der Antworten beeinflussen. Kleinere KV-Cache-Typen sparen VRAM, speichern "
-                                "den Kontext aber ungenauer. Ein kleinerer Kontext bedeutet, dass das Modell weniger vom Gespräch sieht. Die Messung zeigt nur das "
-                                "Tempo, nicht die Qualität. Prüfe das Ergebnis deshalb mit deinen eigenen Aufgaben.")
+                                               text=tr("Achtung: Die nächsten Parameter können die Qualität der Antworten beeinflussen. Kleinere KV-Cache-Typen sparen VRAM, speichern "
+                                "den Kontext aber ungenauer. Die Messung zeigt nur das "
+                                "Tempo, nicht die Qualität. Prüfe das Ergebnis deshalb mit deinen eigenen Aufgaben."))
         warning.pack(fill="x")
-        ttk.Label(page, text="Was soll gemessen werden?", style="Head.TLabel").pack(anchor="w", pady=(12, 4))
+        ttk.Label(page, text=tr("Was soll gemessen werden?"), style="Head.TLabel").pack(anchor="w", pady=(12, 4))
         self.gate_vars = {}
-        for key, text in (("ctk", "-ctk: KV-Cache-Typ K"), ("ctv", "-ctv: KV-Cache-Typ V"), ("c", "-c: Kontextgröße mit den gewählten KV-Typen")):
+        for key, text in (("ctk", tr("-ctk: KV-Cache-Typ K")), ("ctv", tr("-ctv: KV-Cache-Typ V"))):
             self.gate_vars[key] = tk.BooleanVar(value=True)
             ttk.Checkbutton(page, text=text, variable=self.gate_vars[key]).pack(anchor="w", pady=2)
         row = ttk.Frame(page)
         row.pack(anchor="w", pady=(12, 0))
-        ttk.Button(row, text="Ausgewählte messen", style="Big.TButton", command=self._gate_measure).pack(side="left")
-        ttk.Button(row, text="Überspringen", style="Big.TButton", command=self._gate_skip).pack(side="left", padx=(6, 0))
+        ttk.Button(row, text=tr("Ausgewählte messen"), style="Big.TButton", command=self._gate_measure).pack(side="left")
+        ttk.Button(row, text=tr("Überspringen"), style="Big.TButton", command=self._gate_skip).pack(side="left", padx=(6, 0))
 
-    def _build_final_page(self):
-        self.final_page = page = ttk.Frame(self.body)
+    def _build_finish(self, main):
+        """Hinweis, Startbefehl und Profil unter dem fertigen Ergebnis."""
+        self.finish = page = ttk.Frame(main)
+        page.grid(row=3, column=0, sticky="ew")
         page.columnconfigure(0, weight=1)
-        page.rowconfigure(0, weight=1)
-        top = ttk.Frame(page)
-        top.grid(row=0, column=0, sticky="nsew")
-        top.columnconfigure(0, weight=1)
-        top.rowconfigure(0, weight=1)
-        self.final_plot = ttk.Frame(top)
-        self.final_plot.grid(row=0, column=0, sticky="nsew")
-        self.final_table = ttk.Frame(top)
-        self.final_table.grid(row=0, column=1, sticky="n", padx=(8, 0))
+        page.grid_remove()
         self.final_note = tk.StringVar()
         self.final_note_label = ttk.Label(page, textvariable=self.final_note, wraplength=650, justify="left")
-        self.final_note_label.grid(row=1, column=0, sticky="w", pady=(6, 0))
+        self.final_note_label.grid(row=0, column=0, sticky="w", pady=(6, 0))
         self.command_text = tk.Text(page, height=3, wrap="word", font=("Consolas", 9), state="disabled", background="#f4f4f4", relief="flat", padx=6, pady=4)
-        self.command_text.grid(row=2, column=0, sticky="ew", pady=(6, 0))
+        self.command_text.grid(row=1, column=0, sticky="ew", pady=(6, 0))
         row = ttk.Frame(page)
-        row.grid(row=3, column=0, sticky="w", pady=(8, 0))
-        ttk.Label(row, text="Profilname").pack(side="left", padx=(0, 6))
+        row.grid(row=2, column=0, sticky="w", pady=(8, 0))
+        ttk.Label(row, text=tr("Profilname")).pack(side="left", padx=(0, 6))
         self.profile_var = tk.StringVar(value=self.model.stem)
         ttk.Entry(row, textvariable=self.profile_var, width=46).pack(side="left")
-        self.save_button = ttk.Button(row, text="Als Profil speichern", style="Big.TButton", command=self.save_profile)
+        self.save_button = ttk.Button(row, text=tr("Als Profil speichern"), style="Big.TButton", command=self.save_profile)
         self.save_button.pack(side="left", padx=(8, 0))
-        self.remeasure_button = ttk.Button(row, text="Ergebnis neu messen", style="Big.TButton", command=self.remeasure_final)
+        self.remeasure_button = ttk.Button(row, text=tr("Ergebnis neu messen"), style="Big.TButton", command=self.remeasure_final)
         self.remeasure_button.pack(side="left", padx=(8, 0))
-        self.final_canvas = None
 
     def _ensure_canvas(self):
         try:
             from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
             from matplotlib.figure import Figure
         except ImportError:
-            ttk.Label(self.plot, justify="left", text="Für die Diagramme fehlt matplotlib: py -m pip install matplotlib\nDie Messwerte stehen trotzdem in der Tabelle.").pack(anchor="nw")
+            ttk.Label(self.plot, justify="left", text=tr("Für die Diagramme fehlt matplotlib: py -m pip install matplotlib\nDie Messwerte stehen trotzdem in der Tabelle.")).pack(anchor="nw")
             return
         self.figure = Figure(layout="constrained", dpi=96)
         self.canvas = FigureCanvasTkAgg(self.figure, master=self.plot)
@@ -438,15 +484,23 @@ class OptimizeWindow(tk.Toplevel):
             self._show(step)
 
     def _show_page(self, page):
-        for candidate in (self.range_page, self.measure_page, self.gate_page, self.final_page):
+        for candidate in (self.range_page, self.measure_page, self.gate_page):
             if candidate is page:
                 candidate.grid(row=0, column=0, sticky="nsew")
             else:
                 candidate.grid_remove()
 
+    def _last_done(self, step):
+        """Das Ergebnis ist fertig. Dann gibt es Befehl und Profil."""
+        return step is self.steps[-1] and step["done"] and step["key"] == "result" and bool(step["points"])
+
     def _show(self, step):
         self.shown = step
         self._refresh_list()
+        if self._last_done(step) and not self.running:
+            self.finish.grid()
+        else:
+            self.finish.grid_remove()
         title, flag, text = TEXTS[step["key"]]
         self.head_var.set(f"{title}" + (f"   ({flag})" if flag else ""))
         self.explain_var.set(text)
@@ -457,17 +511,36 @@ class OptimizeWindow(tk.Toplevel):
             self._show_page(self.range_page)
             return
         if step["key"] == "gate":
-            self.head_var.set("Parameter, die die Qualität beeinflussen können")
-            self.explain_var.set("Dieser Teil ist freiwillig.")
+            self.head_var.set(tr("Parameter, die die Qualität beeinflussen können"))
+            self.explain_var.set(tr("Dieser Teil ist freiwillig."))
             self._show_page(self.gate_page)
             return
-        if step["key"] == "final" and step["done"]:
-            self.explain_var.set("Die Auswahl lässt sich hier noch ändern. Danach speicherst du sie als Profil mit dem Namen des Modells.")
-            self._show_page(self.final_page)
-            return
+        if step["key"] == "result" and step.get("sweep", {}).get("baseline"):
+            self.explain_var.set(tr("Gestrichelt: die Messung vom Anfang mit den Ausgangswerten. Durchgezogen: mit den gewählten Einstellungen. "
+                                    "Wähle rechts die Kontextgröße, die du nutzen möchtest."))
         self._show_page(self.measure_page)
         self._fill_table(step)
         self._draw(step)
+        self._show_params(step)
+
+    def _show_params(self, step):
+        """Vorher und gewählt für jeden gemessenen Parameter. Nur im fertigen Ergebnis, dort gilt die Auswahl."""
+        for child in self.params.winfo_children():
+            child.destroy()
+        if not self._last_done(step):
+            self.params.grid_remove()
+            return
+        self.params.grid()
+        for column, title in enumerate((tr("Parameter"), tr("Vorher"), tr("Gewählt"))):
+            ttk.Label(self.params, text=title, style="Head.TLabel").grid(row=0, column=column, sticky="w", padx=(0, 14), pady=(0, 4))
+        rows = [("-c", "ctx_size")] + [(other["flag"], self._start_value(other["key"])) for other in self.steps
+                                       if other["points"] and other["key"] not in ("context", "gate", "result")]
+        for number, (flag, name) in enumerate(rows, start=1):
+            before = str(self.start_values.get(name, "")).strip() or tr("Standard")
+            chosen = str(self.current.get(name, "")).strip() or tr("Standard")
+            ttk.Label(self.params, text=flag, style="Flag.TLabel").grid(row=number, column=0, sticky="w", padx=(0, 14), pady=1)
+            ttk.Label(self.params, text=before).grid(row=number, column=1, sticky="w", padx=(0, 14))
+            ttk.Label(self.params, text=chosen, font=("Segoe UI", 9, "bold") if chosen != before else None).grid(row=number, column=2, sticky="w")
 
     def _update_nav(self):
         """Der Knopf rechts führt weiter oder, beim Blick auf einen anderen Schritt, zurück zum aktuellen."""
@@ -480,7 +553,7 @@ class OptimizeWindow(tk.Toplevel):
             self.redo_button.grid_remove()
         if self.shown is not step:
             button.pack(side="right")
-            button.configure(text="Zurück zum aktuellen Schritt", state="normal")
+            button.configure(text=tr("Zurück zum aktuellen Schritt"), state="normal")
             return
         if step is self.steps[-1] and step["done"]:
             button.pack_forget()
@@ -489,15 +562,15 @@ class OptimizeWindow(tk.Toplevel):
         waiting = step["key"] in CHOICE_STEPS and step["done"] and not self.running and not self.aborted
         best = best_point(step["key"], step["points"]) if waiting else None
         if best:
-            button.configure(text="Auswahl übernehmen und weiter", state="normal")
+            button.configure(text=tr("Auswahl übernehmen und weiter"), state="normal")
         elif waiting and step["key"] != "context":
-            button.configure(text="Weiter ohne Änderung", state="normal")
+            button.configure(text=tr("Weiter ohne Änderung"), state="normal")
         else:
-            button.configure(text="Weiter", state="disabled")
+            button.configure(text=tr("Weiter"), state="disabled")
 
     def _fill_table(self, step):
         self.table.delete(*self.table.get_children())
-        best = best_point(step["key"], step["points"]) if step["key"] != "final" else None
+        best = best_point(step["key"], step["points"])
         for index, point in enumerate(step["points"]):
             tags = ("best",) if point is best else ()
             star = "★ " if point is best else ""
@@ -515,15 +588,15 @@ class OptimizeWindow(tk.Toplevel):
         if not step["points"]:
             return ""
         lines = []
-        if best and step["key"] != "final":
-            lines.append(f"★ Empfehlung: {best.get('label', best.get('value'))}")
+        if best:
+            lines.append(tr("★ Empfehlung: {get}", get=best.get('label', best.get('value'))))
         if step["selected"] is not None:
-            lines.append(f"Gewählt: {self._label(step, step['selected'])}")
-        if step["key"] not in ("final", "gate") and step["done"] and not self.running:
-            lines.append("Zum Ändern eine Zeile anklicken.")
+            lines.append(tr("Gewählt: {label}", label=self._label(step, step['selected'])))
+        if step["key"] != "gate" and step["done"] and not self.running:
+            lines.append(tr("Zum Ändern eine Zeile anklicken."))
             later = self.steps[self.steps.index(step) + 1:]
             if any(other["points"] for other in later):
-                lines.append("Die späteren Schritte stammen noch vom vorherigen Wert. „Ab hier neu messen“ wiederholt sie.")
+                lines.append(tr("Die späteren Schritte stammen noch vom vorherigen Wert. „Ab hier neu messen“ wiederholt sie."))
         return "\n".join(lines)
 
     @staticmethod
@@ -563,17 +636,7 @@ class OptimizeWindow(tk.Toplevel):
             settings["cache_k"] = str(value)
         elif key == "ctv":
             settings["cache_v"] = str(value)
-        elif key == "final" and value == "Ausgang":
-            settings = dict(self.start_values)  # Der Ausgangspunkt mit denselben Einstellungen wie im Kontext-Schritt, nur bei der gewählten Größe.
-            settings.update(self._moe_settings(settings, context))
         return settings, context, key == "spec"
-
-    def _final_base(self, context):
-        """Ausgangswert bei dieser Kontextgröße, falls er schon gemessen ist. Sonst muss er mitgemessen werden, damit der Vergleich fair bleibt."""
-        known = self.steps[-1].setdefault("baselines", {}).get(str(context))
-        if known:
-            return dict(known)
-        return next((dict(point) for point in ok_points(self.steps[0]["points"]) if point["value"] == str(context)), None)
 
     def _moe_settings(self, settings, context):
         """Ohne eigene MoE-Felder bekommt jede Kontextgröße die passende Verteilung, sonst würde --fit das Modell ausbremsen."""
@@ -601,11 +664,16 @@ class OptimizeWindow(tk.Toplevel):
             return with_current(KV_VALUES, self.current.get("cache_k", "").strip() or "f16")
         if key == "ctv":
             return with_current(KV_VALUES, self.current.get("cache_v", "").strip() or "f16")
-        if key == "c":
+        if key == "result":
+            # Dieselben Kontexte wie am Anfang, damit sich jede Größe direkt vergleichen lässt.
             chosen = int(self.current["ctx_size"])
-            planned = range_contexts(*self.range, self.app.optimize_limit(self.current))  # Kleinere KV-Typen verschieben die VRAM-Grenze.
-            return sorted({value for value in planned if value >= chosen // 2 and abs(value - chosen) > chosen * CONTEXT_MIN_GAP} | {chosen})
-        return ["Ergebnis"] if self._final_base(int(self.current["ctx_size"])) else ["Ausgang", "Ergebnis"]
+            planned = {point["requested"] for point in self.steps[0]["points"]} | {chosen}
+            limit = self.app.optimize_limit(self.current)  # Kleinere KV-Typen verschieben die VRAM-Grenze, dort knickt das Tempo meist ab.
+            low, high = self.range
+            if limit and low < limit < high and all(max(limit, value) > min(limit, value) * RANGE_MIN_STEP for value in planned):
+                planned.add(limit)
+            return sorted(planned)
+        raise ValueError(key)
 
     def _start_value(self, key):
         return {"ncmoe": "n_cpu_moe", "ub": "ubatch", "spec": "spec_type", "ctk": "cache_k", "ctv": "cache_v"}.get(key)
@@ -613,52 +681,63 @@ class OptimizeWindow(tk.Toplevel):
     def _begin(self, step):
         self.step = step
         if self.range is None:
-            self.status_var.set("Wähle den Bereich und starte die Messung.")
+            self.status_var.set(tr("Wähle den Bereich und starte die Messung."))
             self._show(step)
             return
         if step["key"] == "gate":
-            self.status_var.set("Wähle, was gemessen werden soll, oder überspringe den Schritt.")
+            self.status_var.set(tr("Wähle, was gemessen werden soll, oder überspringe den Schritt."))
             self._show(step)
             return
         if step["key"] in SWEEP_STEPS:
             step["sweep"] = {"time": self.stamp, "model": self.model.stem, "settings": self.app.optimize_describe(self.current), "fit_limit": self.app.optimize_limit(self.current),
                              "free": self.free, "contexts": [], "points": step["points"], "complete": False, "image": step["image"]}
+            if step["key"] == "result":
+                step["sweep"]["baseline"] = self.steps[0]["points"]  # Dieselbe Liste: Nachgemessene Vergleichspunkte erscheinen sofort im Diagramm.
         self._measure(step, self._plan(step))
 
     def _measure(self, step, values):
         jobs = []
+        if step["key"] == "result":
+            # Fehlt am Anfang eine Kontextgröße, etwa die neue VRAM-Grenze, wird sie mit den Ausgangswerten nachgemessen. Sonst gäbe es dort keinen Vergleich.
+            base = self.steps[0]
+            known = {point["requested"] for point in base["points"]}
+            for value in values:
+                if value not in known:
+                    settings = dict(self.start_values)
+                    settings.update(self._moe_settings(settings, value))
+                    jobs.append((value, settings, value, False, base))
         for value in values:
             settings, context, repeat = self._settings(step, value)
-            jobs.append((value, settings, context, repeat))
+            jobs.append((value, settings, context, repeat, step))
         if step["key"] in SWEEP_STEPS:
-            step["sweep"]["contexts"] = sorted(set(step["sweep"]["contexts"]) | {job[0] for job in jobs})
+            step["sweep"]["contexts"] = sorted(set(step["sweep"]["contexts"]) | {job[0] for job in jobs if job[4] is step})
         self.running = True
         self.cancel = threading.Event()
         done = len(step["points"])
         self.measure_total = done + len(jobs)
         self.bar.configure(value=done, maximum=max(self.measure_total, 1))
-        self.abort_button.configure(text="Abbrechen")
+        self.abort_button.configure(text=tr("Abbrechen"))
         self._show(step)
         threading.Thread(target=self._worker, args=(step, jobs, done, self.cancel), daemon=True).start()
 
     def _worker(self, step, jobs, done, cancel):
-        for index, (value, settings, context, repeat) in enumerate(jobs):
+        for index, (value, settings, context, repeat, target) in enumerate(jobs):
             if cancel.is_set():
                 break
             started = time.perf_counter()
             position = done + index + 1
 
-            def announce(phase, shown=value, at=position):
-                self.app.events.put(lambda: self._on_phase(step, shown, at, phase))
+            def announce(phase, shown=tr(value) if isinstance(value, str) else value, at=position):
+                self.app.events.put(lambda: self._on_phase(target, shown, at, phase))
 
             point = self.app._measure_context(self.exe, self.model, settings, context, cancel, announce, repeat)
             if cancel.is_set():
                 break
             point["value"] = str(value)
-            point["label"] = llama_plot.compact_tokens(int(value)) if step["key"] in SWEEP_STEPS else str(value)
+            point["label"] = llama_plot.compact_tokens(int(value)) if target["key"] in SWEEP_STEPS else tr(str(value))
             point["settings"] = {key: settings.get(key, "") for key in ("ngl", "n_cpu_moe", "ubatch", "batch", "spec_type", "cache_k", "cache_v")}
             point["seconds"] = round(time.perf_counter() - started, 1)
-            self.app.events.put(lambda p=point, at=position: self._on_point(step, p, at))
+            self.app.events.put(lambda p=point, at=position, into=target: self._on_point(into, p, at))
         self.app.events.put(lambda: self._on_measured(step, cancel.is_set()))
 
     def _alive(self):
@@ -671,17 +750,19 @@ class OptimizeWindow(tk.Toplevel):
         remaining = ""
         if finished:
             minutes = sum(finished) / len(finished) * (self.measure_total - at + 1) / 60
-            remaining = f"   ·   noch etwa {max(1, round(minutes))} Min. in diesem Schritt"
+            remaining = tr("   ·   noch etwa {value} Min. in diesem Schritt", value=max(1, round(minutes)))
         shown = llama_plot.compact_tokens(int(value)) if step["key"] in SWEEP_STEPS else value
-        self.status_var.set(f"{TEXTS[step['key']][0]}, Punkt {at} von {self.measure_total}: {shown}, {phase}{remaining}")
+        self.status_var.set(tr("{texts}, Punkt {at} von {measure_total}: {shown}, {phase}{remaining}", texts=TEXTS[step['key']][0], at=at, measure_total=self.measure_total, shown=shown, phase=phase, remaining=remaining))
 
     def _on_point(self, step, point, at):
         if not self._alive():
             return
         step["points"].append(point)
+        if step["key"] in SWEEP_STEPS:  # Nachgemessene Punkte reihen sich nach der Größe ein, sonst springt die Linie im Diagramm.
+            step["points"].sort(key=lambda item: item["requested"])
         self.bar.configure(value=at)
         if point.get("error"):
-            self.app._log_app(f"Optimieren, {step['flag']} {point['value']}: {point['error']}")
+            self.app._log_app(tr("Optimieren, {flag} {value}: {error}", flag=step['flag'], value=point['value'], error=point['error']))
         self._persist(step)
         if self.shown is step:
             self._fill_table(step)
@@ -701,37 +782,40 @@ class OptimizeWindow(tk.Toplevel):
         try:
             llama_plot.save_param_png(step, step["image"])
         except ImportError:
-            self.app._log_app("Für das Diagramm fehlt matplotlib: py -m pip install matplotlib.")
+            self.app._log_app(tr("Für das Diagramm fehlt matplotlib: py -m pip install matplotlib."))
         except (OSError, ValueError) as err:
-            self.app._log_app(f"Diagramm nicht gespeichert: {err}")
+            self.app._log_app(tr("Diagramm nicht gespeichert: {err}", err=err))
 
     def _save_report(self):
         report = {"model": self.model.stem, "time": self.stamp, "start": self.start_values, "current": self.current, "profile": self.saved_profile,
-                  "steps": [{key: value for key, value in step.items() if key != "sweep"} for step in self.steps if step["points"] or step["skipped"]]}
+                  "steps": [{key: value for key, value in step.items() if key != "sweep"} for step in self.steps if step["points"] or step["done"]]}
         try:
             self.folder.mkdir(parents=True, exist_ok=True)
             (self.folder / "ergebnis.json").write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
         except OSError as err:
-            self.app._log_app(f"Ergebnis nicht gespeichert: {err}")
+            self.app._log_app(tr("Ergebnis nicht gespeichert: {err}", err=err))
 
     def _on_measured(self, step, cancelled):
         if self.closed:  # Erst jetzt ist der Testserver weg und sein VRAM frei.
             self.app.on_optimizer_closed()
             return
         self.running = False
-        if cancelled and step["key"] == "final" and self.final_backup:
+        if cancelled and step is self.steps[-1] and self.final_backup:
             # Das letzte fertige Ergebnis bleibt, es passt nur nicht mehr zur Auswahl.
+            self._forget_sweep(step)
             step.update(self.final_backup, done=True)
+            if step.get("sweep"):
+                self.app._store_sweep(step["sweep"])
             self.final_backup = None
             self.final_changed = True
-            self.abort_button.configure(text="Schließen")
+            self.abort_button.configure(text=tr("Schließen"))
             self._update_final_note()
             self._show(step)
-            self.status_var.set("Neue Messung abgebrochen. Das Diagramm zeigt noch das vorherige Ergebnis.")
+            self.status_var.set(tr("Neue Messung abgebrochen. Das Diagramm zeigt noch das vorherige Ergebnis."))
             return
         if cancelled:
-            self.status_var.set("Abgebrochen. Die fertigen Messpunkte und Diagramme bleiben gespeichert.")
-            self.abort_button.configure(text="Schließen")
+            self.status_var.set(tr("Abgebrochen. Die fertigen Messpunkte und Diagramme bleiben gespeichert."))
+            self.abort_button.configure(text=tr("Schließen"))
             self.aborted = True
             self._update_nav()
             return
@@ -741,21 +825,18 @@ class OptimizeWindow(tk.Toplevel):
             if more:  # Das Beste lag am Rand, die Suche geht in dieser Richtung weiter.
                 self._measure(step, more)
                 return
-        if key == "final":
-            self._finish_final(step)
-            return
         best = best_point(key, step["points"])
         step["done"] = True
         if key in CHOICE_STEPS:
             self._await_choice(step, best)
             return
         if best is None:
-            self.status_var.set(f"{TEXTS[key][0]}: Kein Messpunkt war erfolgreich, der bisherige Wert bleibt.")
-            self.app._log_app(f"Optimieren: {step['flag']} ohne Ergebnis, der bisherige Wert bleibt.")
+            self.status_var.set(tr("{texts}: Kein Messpunkt war erfolgreich, der bisherige Wert bleibt.", texts=TEXTS[key][0]))
+            self.app._log_app(tr("Optimieren: {flag} ohne Ergebnis, der bisherige Wert bleibt.", flag=step['flag']))
         else:
             step["selected"] = best["value"]
             self.current.update({name: value for name, value in best["settings"].items() if name in self._fields(key)})
-            self.app._log_app(f"Optimieren: {step['flag']} {best['value']} gewählt.")
+            self.app._log_app(tr("Optimieren: {flag} {value} gewählt.", flag=step['flag'], value=best['value']))
         self._persist(step)
         self._fill_table(step)
         self._go_on(step)
@@ -767,7 +848,7 @@ class OptimizeWindow(tk.Toplevel):
     def _await_choice(self, step, best):
         """Bei den Kontextgrößen ist die Empfehlung vorgewählt. Bei KV-Typen bleibt der bisherige Wert, weil sie die Qualität berühren."""
         key = step["key"]
-        keep = self.current.get(self._start_value(key) or "", "").strip() or "f16" if key in ("ctk", "ctv") else self.current.get("ctx_size", "") if key == "c" else None
+        keep = self.current.get(self._start_value(key) or "", "").strip() or "f16" if key in ("ctk", "ctv") else self.current.get("ctx_size", "") if key == "result" else None
         measured = {point["value"] for point in ok_points(step["points"])}
         if keep in measured:
             step["selected"] = keep
@@ -776,17 +857,20 @@ class OptimizeWindow(tk.Toplevel):
         self._fill_table(step)
         self._update_nav()
         if best is None:
-            self.status_var.set("Kein Messpunkt war erfolgreich. Prüfe das Server-Log und die Einstellungen.")
+            self.status_var.set(tr("Kein Messpunkt war erfolgreich. Prüfe das Server-Log und die Einstellungen."))
             if key == "context":
-                self.abort_button.configure(text="Schließen")
+                self.abort_button.configure(text=tr("Schließen"))
             return
-        self.status_var.set("Fertig gemessen. Wähle in der Tabelle den gewünschten Wert und gehe weiter.")
+        if step is self.steps[-1]:
+            self._finish_context(step)
+            return
+        self.status_var.set(tr("Fertig gemessen. Wähle in der Tabelle den gewünschten Wert und gehe weiter."))
 
     def _on_table_pick(self):
         """Eine Zeile wählt den Wert. Im aktuellen Schritt gilt er beim Weitergehen, in einem früheren sofort."""
         step = self.shown
         picked = self.table.selection()
-        if not picked or step is None or step["key"] in ("final", "gate") or not step["done"]:
+        if not picked or step is None or step["key"] == "gate" or not step["done"]:
             return
         point = step["points"][int(picked[0])]
         if str(point.get("value")) == str(step["selected"]):
@@ -798,7 +882,13 @@ class OptimizeWindow(tk.Toplevel):
         if step is not self.step:
             self._apply_selection(step, point)
             self._persist(step)
-            self.status_var.set(f"{step['flag']} ist jetzt {point.get('label', point['value'])}.")
+            self.status_var.set(tr("{flag} ist jetzt {get}.", flag=step['flag'], get=point.get('label', point['value'])))
+        elif step is self.steps[-1]:  # Nach dem letzten Kontext kommt nichts mehr, die Wahl gilt sofort.
+            self._apply_choice(step)
+            self._persist(step)
+            self._update_command()
+            self._update_final_note()
+            self._show_params(step)
         self.pick_var.set(self._pick_text(step, best_point(step["key"], step["points"])))
         self._draw(step)
 
@@ -817,7 +907,7 @@ class OptimizeWindow(tk.Toplevel):
 
     def _can_redo(self):
         shown = self.shown
-        return shown is not None and shown is not self.step and shown["done"] and shown["key"] not in ("gate", "final") and not self.running
+        return shown is not None and shown is not self.step and shown["done"] and shown["key"] not in ("gate", "result") and not self.running
 
     def redo_from_shown(self):
         """Misst alle Schritte nach dem gezeigten neu. Nötig, wenn eine Änderung den freien VRAM verschiebt und damit die späteren Empfehlungen."""
@@ -827,9 +917,9 @@ class OptimizeWindow(tk.Toplevel):
         index = self.steps.index(step)
         later = self.steps[index + 1:]
         seconds = sum(point.get("seconds") or 0 for other in later for point in other["points"])
-        duration = f"Beim letzten Mal dauerte das etwa {max(1, round(seconds / 60))} Min. " if seconds else ""
-        if not messagebox.askokcancel("Ab hier neu messen", "Alle Schritte nach diesem werden noch einmal gemessen, ihre bisherigen Werte und Diagramme fallen weg. "
-                                      f"{duration}Deine Wahl in den Schritten bis hier bleibt.", parent=self):
+        duration = tr("Beim letzten Mal dauerte das etwa {value} Min. ", value=max(1, round(seconds / 60))) if seconds else ""
+        if not messagebox.askokcancel(tr("Ab hier neu messen"), tr("Alle Schritte nach diesem werden noch einmal gemessen, ihre bisherigen Werte und Diagramme fallen "
+            "weg. {duration}Deine Wahl in den Schritten bis hier bleibt.", duration=duration), parent=self):
             return
         gate = next((other for other in later if other["key"] == "gate"), None)
         removed = []
@@ -843,15 +933,14 @@ class OptimizeWindow(tk.Toplevel):
             try:
                 Path(other["image"]).unlink(missing_ok=True)
             except OSError as err:
-                self.app._log_app(f"Altes Diagramm nicht gelöscht: {err}")
+                self.app._log_app(tr("Altes Diagramm nicht gelöscht: {err}", err=err))
             other.update(points=[], selected=None, done=False, skipped=False)
         self.final_changed = False
-        self.final_result = None
         self.final_backup = None
         self.aborted = False
-        self.abort_button.configure(text="Abbrechen")
+        self.abort_button.configure(text=tr("Abbrechen"))
         self.bar.configure(value=0)
-        self.app._log_app(f"Optimieren: Ab {step['flag']} wird neu gemessen.")
+        self.app._log_app(tr("Optimieren: Ab {flag} wird neu gemessen.", flag=step['flag']))
         self._save_report()
         self._begin(self.steps[index + 1])
 
@@ -861,11 +950,11 @@ class OptimizeWindow(tk.Toplevel):
             self._apply_choice(step)
         else:
             self.current.update({name: value for name, value in point["settings"].items() if name in self._fields(step["key"])})
-            self.app._log_app(f"Optimieren: {step['flag']} {point['value']} gewählt.")
+            self.app._log_app(tr("Optimieren: {flag} {value} gewählt.", flag=step['flag'], value=point['value']))
         if self.steps[-1]["done"]:
             self.final_changed = True
-            self._build_final_rows()
             self._update_command()
+            self._update_final_note()
 
     def _apply_choice(self, step):
         key = step["key"]
@@ -881,7 +970,7 @@ class OptimizeWindow(tk.Toplevel):
                 self.base_point = point
         else:
             self.current[self._start_value(key)] = point["value"]
-        self.app._log_app(f"Optimieren: {step['flag']} {point['value']} gewählt.")
+        self.app._log_app(tr("Optimieren: {flag} {value} gewählt.", flag=step['flag'], value=point['value']))
 
     def _go_on(self, step):
         index = self.steps.index(step)
@@ -899,7 +988,7 @@ class OptimizeWindow(tk.Toplevel):
             step = self._new_step(key)
             step["image"] = str(self.folder / f"{position + offset + 1:02d}_{key}.png")
             self.steps.insert(position + offset, step)
-        self.steps[-1]["image"] = str(self.folder / f"{len(self.steps):02d}_final.png")
+        self.steps[-1]["image"] = str(self.folder / f"{len(self.steps):02d}_result.png")
         self._go_on(gate)
 
     def _gate_skip(self):
@@ -914,96 +1003,55 @@ class OptimizeWindow(tk.Toplevel):
         final = self.steps[-1]
         if self.running or not final["done"]:
             return
-        self.final_backup = {"points": final["points"], "selected": final["selected"]}
+        self.final_backup = {"points": final["points"], "selected": final["selected"], "sweep": final["sweep"]}
+        self._forget_sweep(final)
         final.update(points=[], selected=None, done=False)
         self.final_changed = False
         self.step = final
-        self._measure(final, self._plan(final))
+        self._begin(final)
 
-    def _finish_final(self, step):
-        step["done"] = True
+    def _forget_sweep(self, step):
+        """Nimmt eine überholte Kontextmessung aus dem Verlauf des Kontext-Tests."""
+        sweep = step.get("sweep")
+        saved = self.app._saved_sweeps()
+        if sweep in saved:
+            saved.remove(sweep)
+
+    def _finish_context(self, step):
+        """Im Ergebnis gilt die Auswahl sofort, es kommt kein Schritt mehr. Darunter stehen Befehl und Profil."""
         self.final_backup = None
-        context = int(self.current["ctx_size"])
-        measured = next((point for point in step["points"] if point["value"] == "Ergebnis"), None)
-        base = next((point for point in step["points"] if point["value"] == "Ausgang"), None)
-        if base is None:
-            base = self._final_base(context)
-        elif base.get("state") == "OK":
-            step["baselines"][str(context)] = dict(base)
-        size = llama_plot.compact_tokens((measured or {}).get("ctx") or context)
-        for point, name in ((base, "Ausgang"), (measured, "Ergebnis")):
-            if point:  # Beide Werte gelten für dieselbe Kontextgröße. Das steht dabei, damit die Zahlen nicht größer oder kleiner wirken, als sie sind.
-                point.update(value=name, label=f"{name} ({size} Kontext)")
-        step["points"] = [point for point in (base, measured) if point]
-        step["selected"] = "Ergebnis"
-        self.final_result = measured
-        self._save_image(step)
-        self._save_report()
-        self._build_final_rows()
-        self._draw_final(step)
+        self.final_changed = False
+        self._apply_choice(step)
+        self._persist(step)
         self._update_command()
-        self.status_var.set("Fertig. Prüfe die Werte und speichere sie als Profil.")
+        self._update_final_note()
+        self.status_var.set(tr("Fertig. Wähle rechts die Kontextgröße und speichere sie als Profil."))
         self.bar.configure(value=self.bar["maximum"])
-        self.abort_button.configure(text="Schließen")
+        self.abort_button.configure(text=tr("Schließen"))
         self._show(step)
 
-    def _draw_final(self, step):
-        if self.final_canvas is None and self.figure is not None:
-            from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-            from matplotlib.figure import Figure
-
-            self.final_figure = Figure(layout="constrained", dpi=96)
-            self.final_canvas = FigureCanvasTkAgg(self.final_figure, master=self.final_plot)
-            self.final_canvas.get_tk_widget().pack(fill="both", expand=True)
-        if self.final_canvas is not None:
-            llama_plot.draw_param(self.final_figure, step, compact=True)
-            self.final_canvas.draw_idle()
-
-    def _build_final_rows(self):
-        for child in self.final_table.winfo_children():
-            child.destroy()
-        for column, title in enumerate(("Parameter", "Vorher", "Gewählt")):
-            ttk.Label(self.final_table, text=title, style="Head.TLabel").grid(row=0, column=column, sticky="w", padx=(0, 8), pady=(0, 4))
-        self.final_boxes = {}
-        rows = [step for step in self.steps if step["points"] and step["key"] not in ("final",) and not (step["key"] == "context" and any(s["key"] == "c" and s["points"] for s in self.steps))]
-        for number, step in enumerate(rows, start=1):
-            name = "ctx_size" if step["key"] in SWEEP_STEPS else self._start_value(step["key"])
-            before = self.start_values.get(name, "").strip() or "Standard"
-            ttk.Label(self.final_table, text=step["flag"], style="Flag.TLabel").grid(row=number, column=0, sticky="w", padx=(0, 8), pady=2)
-            ttk.Label(self.final_table, text=before).grid(row=number, column=1, sticky="w", padx=(0, 8))
-            values = [point["value"] for point in ok_points(step["points"])]
-            box = ttk.Combobox(self.final_table, values=values, state="readonly", width=20)
-            box.set(self.current.get(name, ""))
-            box.grid(row=number, column=2, sticky="w", pady=2)
-            box.bind("<<ComboboxSelected>>", lambda _event, target=name, widget=box: self._on_final_change(target, widget))
-            self.final_boxes[name] = box
-        self._update_final_note()
-
-    def _on_final_change(self, name, box):
-        self.current[name] = box.get()
-        if name == "n_cpu_moe":
-            self.current["ngl"] = "all"
-        self.final_changed = True
-        self._update_command()
-        self._update_final_note()
+    def _context_note(self, step):
+        """Vergleich bei der gewählten Kontextgröße, sofern sie auch am Anfang gemessen wurde."""
+        result = next((point for point in ok_points(step["points"]) if point["value"] == step["selected"]), None)
+        if result is None:
+            return []
+        base = next((point for point in ok_points(self.steps[0]["points"]) if point["ctx"] == result["ctx"]), None)
+        size = llama_plot.compact_tokens(result["ctx"])
+        if base is None:
+            return [tr("Für {ctx} gibt es keine Messung mit den Ausgangswerten. Das Diagramm zeigt die Werte daneben.", ctx=size)]
+        parts = [tr("Vergleich bei gleichem Kontext von {ctx}.", ctx=size),
+                 tr("Antwort: {tps} → {tps2} Tok/s.", tps=llama_plot.format_number(base['tps']), tps2=llama_plot.format_number(result['tps']))]
+        if base.get("prompt_tps") and result.get("prompt_tps"):
+            parts.append(tr("Einlesen: {prompt_tps} → {prompt_tps2} Tok/s.", prompt_tps=llama_plot.format_number(base['prompt_tps'], 0),
+                            prompt_tps2=llama_plot.format_number(result['prompt_tps'], 0)))
+        return parts
 
     def _update_final_note(self):
-        result = self.final_result
-        base = next((point for point in self.steps[-1]["points"] if point.get("value") == "Ausgang"), None)
-        parts = []
-        if result and result.get("state") == "OK" and base and base.get("tps"):
-            parts.append(f"Vergleich bei gleichem Kontext von {llama_plot.compact_tokens(result['ctx'])}.")
-            parts.append(f"Antwort: {llama_plot.german_number(base['tps'])} → {llama_plot.german_number(result['tps'])} Tok/s.")
-            if base.get("prompt_tps") and result.get("prompt_tps"):
-                parts.append(f"Einlesen: {llama_plot.german_number(base['prompt_tps'], 0)} → {llama_plot.german_number(result['prompt_tps'], 0)} Tok/s.")
-        elif result and result.get("state") == "OK":
-            parts.append(f"Der Ausgangspunkt ließ sich bei {llama_plot.compact_tokens(result['ctx'])} Kontext nicht messen.")
-        elif result:
-            parts.append(f"Die Schlussmessung ist fehlgeschlagen: {result.get('error', 'unbekannter Fehler')}")
+        parts = self._context_note(self.steps[-1])
         if self.final_changed:
-            parts.append("Die Auswahl hat sich geändert, das Diagramm zeigt noch die vorherige. Drücke „Ergebnis neu messen“.")
+            parts.append(tr("Eine frühere Auswahl hat sich geändert, das Diagramm zeigt noch die vorherige. Drücke „Ergebnis neu messen“."))
         if any(step["quality"] and step["points"] for step in self.steps):
-            parts.append("Du hast Parameter gemessen, die die Qualität beeinflussen können. Das Tempo sagt darüber nichts aus.")
+            parts.append(tr("Du hast Parameter gemessen, die die Qualität beeinflussen können. Das Tempo sagt darüber nichts aus."))
         self.final_note.set("   ".join(parts))
 
     def _update_command(self):
@@ -1015,15 +1063,15 @@ class OptimizeWindow(tk.Toplevel):
     def save_profile(self):
         name = self.profile_var.get().strip()
         if not name:
-            messagebox.showinfo("Profil", "Bitte einen Profilnamen eintragen.", parent=self)
+            messagebox.showinfo(tr("Profil"), tr("Bitte einen Profilnamen eintragen."), parent=self)
             return
-        if self.app.profile_exists(name) and not messagebox.askokcancel("Profil", f"Das Profil „{name}“ gibt es schon. Überschreiben?", parent=self):
+        if self.app.profile_exists(name) and not messagebox.askokcancel(tr("Profil"), tr("Das Profil „{name}“ gibt es schon. Überschreiben?", name=name), parent=self):
             return
         self.app.save_optimized_profile(name, self.current, self.model)
         self.saved_profile = name
         self._save_report()
-        self.status_var.set(f"Als Profil „{name}“ gespeichert und ins Hauptfenster übernommen.")
-        self.app._log_app(f"Optimieren: Profil „{name}“ gespeichert.")
+        self.status_var.set(tr("Als Profil „{name}“ gespeichert und ins Hauptfenster übernommen.", name=name))
+        self.app._log_app(tr("Optimieren: Profil „{name}“ gespeichert.", name=name))
 
     # ---------- Ende ----------
 
@@ -1034,7 +1082,7 @@ class OptimizeWindow(tk.Toplevel):
     def abort(self):
         if self.running:
             self.cancel.set()
-            self.status_var.set("Wird abgebrochen…")
+            self.status_var.set(tr("Wird abgebrochen…"))
             process = self.app.sweep_proc
             if process and process.poll() is None:
                 process.terminate()
@@ -1045,9 +1093,9 @@ class OptimizeWindow(tk.Toplevel):
         if self.closed:
             return
         finished = self.steps[-1]["done"]
-        if self.running and not force and not messagebox.askokcancel("Modell optimieren", "Die Messung läuft noch. Fertige Punkte und Diagramme bleiben gespeichert.", parent=self):
+        if self.running and not force and not messagebox.askokcancel(tr("Modell optimieren"), tr("Die Messung läuft noch. Fertige Punkte und Diagramme bleiben gespeichert."), parent=self):
             return
-        if finished and not self.saved_profile and not force and not messagebox.askokcancel("Modell optimieren", "Das Ergebnis ist noch nicht als Profil gespeichert. Trotzdem schließen?", parent=self):
+        if finished and not self.saved_profile and not force and not messagebox.askokcancel(tr("Modell optimieren"), tr("Das Ergebnis ist noch nicht als Profil gespeichert. Trotzdem schließen?"), parent=self):
             return
         waiting = self.running
         if waiting:
