@@ -8,6 +8,10 @@
 
 NoProbLlama gets more out of your local AI models. Instead of trying start options one at a time by hand, you test them systematically: the **Optimize model** wizard measures the context size and the most important parameters one after the other, shows you the speed as curves and so guides you to the settings that make your model run as fast and as well as possible on your graphics card. It saves the best combination as a profile.
 
+![Optimize model example: prompt and answer speed with the chosen settings as solid lines, the measurement from the start dashed, and the context size selection on the right](Bilder/en/result.png)
+
+**Example:** Qwen3.6 35B-A3B, a MoE model, on an RTX 4070 with 12 GB. Dashed are the baseline values, solid is the result of **Optimize model**. At 110K of context, the model answers at 46.2 instead of 29.8 Tok/s and reads the prompt at 762 instead of 140 Tok/s, with no compromise on quality.
+
 NoProbLlama is a Windows interface for [llama.cpp](https://github.com/ggml-org/llama.cpp). The program also estimates the memory needed before you start anything. For chatting, it has its own window that works without a browser and therefore saves VRAM. And as soon as the server is running, you can use the model directly in OpenCode.
 
 ![Main window with model selection, VRAM estimate, buttons and settings](Bilder/en/main_window.png)
@@ -40,11 +44,9 @@ Start the wizard with the **Optimize model** button in the top bar. On the left,
 3. **Parameters that can affect quality (optional):** `-ctk` and `-ctv`. Here you decide yourself what to measure and which value to use. If you do not want to risk any loss of quality, simply skip this part. The measurement only shows speed, not quality, so check the result with your own tasks.
 4. **Result:** Finally, the program measures the context sizes once more, this time with all chosen settings. The chart shows this measurement as a solid line and the one from the start dashed in a darker shade, at the same context sizes. If a size is missing from the start, such as a new VRAM limit after smaller KV types, the program measures it with the baseline values. This way you see for every context size what your settings bring. You choose the size on the right, and below it are the start command and the button to save everything as a profile with the name of the model. The profile is then available in the main window too. All sizes from the start are measured again, which takes a few minutes.
 
-![Result: prompt and answer speed with the chosen settings as solid lines, the measurement from the start dashed, and the context size selection on the right](Bilder/en/result.png)
+The example at the top shows the MoE model Qwen3.6 35B-A3B (Q6_K) on an RTX 4070 with 12 GB, with the quality part skipped. With the baseline values, speed drops above 47K of context. With `-ncmoe 30`, `-ub 2048` and `ngram-mod`, however, the answer holds at around 46 Tok/s up to 110K. At 110K it rises from 29.8 to 46.2 Tok/s and prompt reading from 140 to 762 Tok/s, at 81K from 36.1 to 46.1 and from 147 to 1,105 Tok/s. No quality is lost for this. At the very top, at 262K, the baseline measurement answers a little faster. There, each context size had its own distribution of the experts at the start, while the result uses a fixed `-ncmoe 30`.
 
-The example shows Hermes 4 14B (IQ4_XS) on an RTX 4070 with 12 GB. With the baseline values, speed drops above 19K of context, presumably because VRAM overflows. `-ctk q8_0` saves about 700 MiB here, and speed then holds up to 26K. At 26K, the answer therefore goes from 35.6 to 57.2 Tok/s and prompt reading from 1,786 to 2,418 Tok/s. This measurement does not show whether `q8_0` changes the quality.
-
-The individual steps can also reveal a lot. In the same run, `ngram-simple` raised the speed on repeated text from 53 to 1,011 Tok/s, without slowing down new text. In another run with Hermes 3 8B (Q6_K), the answer fell to 1.9 Tok/s at 47K of context with `-ctk f16`, and reached 67 Tok/s with `q8_0`.
+The individual steps can also reveal a lot. In the same run, `-ncmoe 30` instead of 28 raised prompt reading at 81K from 278 to 545 Tok/s and the answer from 31.4 to 46.3 Tok/s. `-ub 2048` instead of 512 then doubled prompt reading again to 1,095 Tok/s. In a run with Hermes 4 14B, `ngram-simple` raised the speed on repeated text from 53 to 1,011 Tok/s, without slowing down new text. In another run with Hermes 3 8B (Q6_K), the answer fell to 1.9 Tok/s at 47K of context with `-ctk f16`, and reached 67 Tok/s with `q8_0`.
 
 **Good to know:**
 
