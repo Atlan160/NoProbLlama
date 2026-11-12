@@ -40,6 +40,7 @@ TEXTS = {
     "context": (tr("Kontextgröße"), "-c", tr("Misst das Tempo bei verschiedenen Kontextgrößen. Wähle danach die Größe, die du nutzen möchtest.")),
     "range": (tr("Kontextgröße"), "-c", tr("Wähle den Bereich, in dem gemessen werden soll. Dazwischen verteilt das Programm 7 Messpunkte.")),
     "ncmoe": (tr("MoE-Experten"), "-ncmoe", tr("Sucht, wie viele Expertenschichten in den RAM sollten. Der beste Wert wird automatisch gewählt.")),
+    "threads": (tr("CPU-Threads"), "-t", tr("Misst, mit wie vielen CPU-Threads der Teil des Modells im RAM am schnellsten rechnet. Automatisch bleibt, solange nichts merklich schneller ist.")),
     "ub": (tr("Micro-Batch"), "-ub", tr("Sucht das schnellste Einlesen, ohne dass das Antworttempo leidet. Der beste Wert wird automatisch gewählt.")),
     "spec": (tr("Spekulation"), "--spec-type", tr("Misst neuen und wiederholten Text. Gewählt wird das Schnellste bei wiederholtem Text, das neuen Text höchstens 5 % kostet.")),
     "gate": (tr("Qualität"), "", ""),
@@ -50,6 +51,7 @@ TEXTS = {
 MEANINGS = {
     "context": tr("Wie viele Tokens das Modell gleichzeitig sehen kann: Verlauf, Dateien und die aktuelle Antwort."),
     "ncmoe": tr("Bei wie vielen Schichten die Experten im RAM liegen. Die übrigen rechnen schneller im VRAM."),
+    "threads": tr("Wie viele CPU-Kerne mitrechnen. Zählt nur, wenn ein Teil des Modells im RAM liegt. Mehr ist nicht immer schneller."),
     "ub": tr("Wie viele Tokens auf einmal berechnet werden. Mehr liest lange Prompts schneller ein, braucht aber VRAM."),
     "spec": tr("Sagt die nächsten Tokens voraus und lässt das Modell sie gemeinsam prüfen. Das beschleunigt wiederholten Text."),
     "gate": tr("Freiwillig: Die folgenden Parameter können die Antworten verändern."),
@@ -162,6 +164,15 @@ def range_contexts(low, high, limit=None):
     return points
 
 
+THREAD_SHARES = (1 / 4, 1 / 3, 1 / 2, 2 / 3, 1)  # Anteile der echten Kerne. Bei 8 schnellen und 16 langsamen Kernen sind das 6, 8, 12, 16 und 24.
+
+
+def thread_plan(cores, current=""):
+    """Messreihe für -t: zuerst automatisch als Ausgangspunkt, dann aufsteigend. So bleibt automatisch gewählt, wenn nichts merklich schneller ist."""
+    counts = sorted({max(1, round(cores * share)) for share in THREAD_SHARES} | ({int(current)} if current.isdigit() and int(current) > 0 else set()))
+    return ["auto"] + [str(count) for count in counts]
+
+
 def with_current(values, current):
     """Der aktuelle Wert gehört immer zur Messreihe, damit der Ausgangspunkt vergleichbar bleibt."""
     return list(values) + ([current] if current and current not in values else [])
@@ -209,7 +220,7 @@ class OptimizeWindow(tk.Toplevel):
         if resume:
             self._restore(resume)
             return
-        for key in ("context", "ncmoe", "ub", "spec", "gate", "result"):
+        for key in ("context", "ncmoe", "threads", "ub", "spec", "gate", "result"):
             if key != "ncmoe" or info.get("experts"):  # Normale Modelle haben keine Experten, die sich verteilen ließen.
                 self.steps.append(self._new_step(key))
         self._refresh_list()
@@ -224,8 +235,14 @@ class OptimizeWindow(tk.Toplevel):
         self.stamp = report.get("time") or self.stamp
         self.saved_profile = report.get("profile") or ""
         later = any(key in saved for key in ("ctk", "ctv", "c", "final", "result"))
-        for key in ("context", "ncmoe", "ub", "spec", "gate", "ctk", "ctv", "result"):
+        for key in ("context", "ncmoe", "threads", "ub", "spec", "gate", "ctk", "ctv", "result"):
             if key == "ncmoe" and not self.info.get("experts"):
+                continue
+            if key == "threads" and key not in saved and any(name in saved for name in ("ub", "spec")):
+                # Ältere Läufe kennen den Schritt nicht. Nachträglich messen hieße, alles danach zu wiederholen.
+                step = self._new_step(key)
+                step.update(done=True, skipped=True)
+                self.steps.append(step)
                 continue
             if key in QUALITY_STEPS and key not in saved:
                 continue
@@ -625,6 +642,8 @@ class OptimizeWindow(tk.Toplevel):
             settings.update(self._moe_settings(settings, context))
         elif key == "ncmoe":
             settings.update(ngl="all", cpu_moe="", n_cpu_moe=str(value))
+        elif key == "threads":
+            settings["threads"] = "" if value == "auto" else str(value)
         elif key == "ub":
             settings["ubatch"] = str(value)
             batch = settings.get("batch", "").strip()
@@ -655,6 +674,8 @@ class OptimizeWindow(tk.Toplevel):
             suggestion = self.app.optimize_moe_suggestion(self.current, int(self.current["ctx_size"]), self.free)
             center = int(current) if current.isdigit() else suggestion["n_cpu_moe"] if suggestion else layers // 2
             return moe_plan(center, layers)
+        if key == "threads":
+            return thread_plan(self.app.optimize_cores(), self.current.get("threads", "").strip())
         if key == "ub":
             return with_current(UB_VALUES, self.current.get("ubatch", "").strip() or "512")
         if key == "spec":
@@ -676,7 +697,7 @@ class OptimizeWindow(tk.Toplevel):
         raise ValueError(key)
 
     def _start_value(self, key):
-        return {"ncmoe": "n_cpu_moe", "ub": "ubatch", "spec": "spec_type", "ctk": "cache_k", "ctv": "cache_v"}.get(key)
+        return {"ncmoe": "n_cpu_moe", "threads": "threads", "ub": "ubatch", "spec": "spec_type", "ctk": "cache_k", "ctv": "cache_v"}.get(key)
 
     def _begin(self, step):
         self.step = step
@@ -688,12 +709,28 @@ class OptimizeWindow(tk.Toplevel):
             self.status_var.set(tr("Wähle, was gemessen werden soll, oder überspringe den Schritt."))
             self._show(step)
             return
+        if step["key"] == "threads" and not self._cpu_share():
+            # Liegt alles im VRAM, rechnet die CPU nicht mit. Dann ändern Threads nichts am Tempo.
+            step.update(done=True, skipped=True)
+            self.app._log_app(tr("Optimieren: -t übersprungen, das Modell rechnet ganz auf der Grafikkarte."))
+            self._go_on(step)
+            return
         if step["key"] in SWEEP_STEPS:
             step["sweep"] = {"time": self.stamp, "model": self.model.stem, "settings": self.app.optimize_describe(self.current), "fit_limit": self.app.optimize_limit(self.current),
                              "free": self.free, "contexts": [], "points": step["points"], "complete": False, "image": step["image"]}
             if step["key"] == "result":
                 step["sweep"]["baseline"] = self.steps[0]["points"]  # Dieselbe Liste: Nachgemessene Vergleichspunkte erscheinen sofort im Diagramm.
         self._measure(step, self._plan(step))
+
+    def _cpu_share(self):
+        """Rechnet bei der gewählten Kontextgröße ein Teil des Modells auf der CPU? Experten im RAM oder ein Modell, das nicht ganz in den VRAM passt."""
+        current = self.current
+        if current.get("cpu_moe") or current.get("n_cpu_moe", "").strip() not in ("", "0"):
+            return True
+        if current.get("ngl", "").strip() == "0":
+            return True
+        limit = self.app.optimize_limit(current)
+        return limit is not None and int(current["ctx_size"]) > limit
 
     def _measure(self, step, values):
         jobs = []
@@ -735,7 +772,7 @@ class OptimizeWindow(tk.Toplevel):
                 break
             point["value"] = str(value)
             point["label"] = llama_plot.compact_tokens(int(value)) if target["key"] in SWEEP_STEPS else tr(str(value))
-            point["settings"] = {key: settings.get(key, "") for key in ("ngl", "n_cpu_moe", "ubatch", "batch", "spec_type", "cache_k", "cache_v")}
+            point["settings"] = {key: settings.get(key, "") for key in ("ngl", "n_cpu_moe", "threads", "ubatch", "batch", "spec_type", "cache_k", "cache_v")}
             point["seconds"] = round(time.perf_counter() - started, 1)
             self.app.events.put(lambda p=point, at=position, into=target: self._on_point(into, p, at))
         self.app.events.put(lambda: self._on_measured(step, cancel.is_set()))
@@ -843,7 +880,7 @@ class OptimizeWindow(tk.Toplevel):
 
     @staticmethod
     def _fields(key):
-        return {"ncmoe": ("ngl", "n_cpu_moe"), "ub": ("ubatch", "batch"), "spec": ("spec_type",), "ctk": ("cache_k",), "ctv": ("cache_v",)}.get(key, ())
+        return {"ncmoe": ("ngl", "n_cpu_moe"), "threads": ("threads",), "ub": ("ubatch", "batch"), "spec": ("spec_type",), "ctk": ("cache_k",), "ctv": ("cache_v",)}.get(key, ())
 
     def _await_choice(self, step, best):
         """Bei den Kontextgrößen ist die Empfehlung vorgewählt. Bei KV-Typen bleibt der bisherige Wert, weil sie die Qualität berühren."""

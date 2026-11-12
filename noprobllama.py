@@ -45,6 +45,7 @@ PROMPT_TEST_MIN_TOKENS = 1000  # Darunter wäre der Wert nicht aussagekräftig.
 PROMPT_TEST_SECONDS = 10  # Länger wird nicht eingelesen. Bei überlaufendem VRAM bräuchte der ganze Prompt sonst über eine Minute pro Messpunkt.
 PROMPT_IDLE_TIMEOUT = 60  # So lange darf der Server nach dem Abbruch noch am Prompt rechnen, bevor die Antwort gemessen wird.
 SWEEP_ANSWER_SECONDS = 10  # Messzeit der Antwort in allen Tests, ab dem ersten Token. Danach wird abgeschnitten, das Tempo steht dann.
+DEVICE_CHECK_SECONDS = (30, 90)  # Zeitlimits für llama-server --list-devices, erst normal, dann großzügig.
 SWEEP_LOAD_TIMEOUT = 300  # Sekunden, die ein Messpunkt zum Laden des Modells bekommt.
 SWEEP_GRID = (8448, 12288, 16384, 24576, 32768, 49152, 65536, 98304, 131072, 196608, 262144)  # Ab 8448 passt der ganze Prompt.
 SWEEP_GRID_DEFAULT_TOP = 65536
@@ -372,7 +373,50 @@ def read_gguf_info(path):
         "experts_used": whole_number(value("expert_used_count")) if expert_count else 0,
         "tools": isinstance(template, str) and "tools" in template,
         "missing_parts": max(0, int(split.group(1)) - len(parts)) if split else 0,
+        "embedding": whole_number(value("embedding_length")) or 0,
+        "basename": meta.get("general.basename") if isinstance(meta.get("general.basename"), str) else "",
     }
+
+
+PROJECTOR_KEYS = ("general.name", "general.basename", "clip.vision.projection_dim", "clip.has_vision_encoder")
+
+
+def read_projector_info(path):
+    """Liest aus einem Multimodal-Projektor, für welches Modell er gebaut ist. Liefert {} bei unlesbaren Dateien."""
+    found = {}
+    try:
+        with open(path, "rb") as file:
+            reader = GgufReader(file, path.stat().st_size)
+            if file.read(4) != b"GGUF" or reader.read("<I") not in (2, 3):
+                return {}
+            reader.count()
+            for _ in range(min(reader.count(), 64)):
+                key = reader.text()
+                item = reader.value(reader.read("<I"))
+                if key in PROJECTOR_KEYS:
+                    found[key] = item
+                if len(found) == len(PROJECTOR_KEYS):
+                    break
+    except (OSError, ValueError, struct.error, OverflowError, MemoryError):
+        return {}
+    return found
+
+
+def name_core(text):
+    """„Qwen_Qwen3.8 27B“ und „Qwen3.8-27B“ werden zu Vergleichsformen wie qwen38 und 27b."""
+    return {part for part in re.split(r"[^a-z0-9]+", text.lower().replace(".", "")) if part}
+
+
+def projector_fits(info, projector):
+    """Ein Projektor passt, wenn seine Ausgabe so breit ist wie die Embeddings des Modells und die Namen nicht widersprechen.
+    Die Breite allein reicht nicht: Ein Textmodell derselben Größe hätte sie auch, kann aber keine Bilder verarbeiten."""
+    width = projector.get("clip.vision.projection_dim")
+    if not width or not info.get("embedding") or width != info["embedding"]:
+        return False
+    model_names = name_core(f"{info.get('basename', '')} {info.get('name', '')}")
+    projector_names = name_core(f"{projector.get('general.basename', '')} {projector.get('general.name', '')}")
+    families = {part for part in projector_names if re.search(r"[a-z]", part) and re.search(r"\d", part)}  # Etwa qwen38, nicht 27b allein.
+    return not families or bool(families & model_names)
 
 
 def gguf_architecture(path):
@@ -1349,8 +1393,7 @@ class App(tk.Tk):
         self.model_box.configure(values=labels)
         match = next((label for label, p in self.model_paths.items() if str(p) == previous), None)
         self.model_var.set(match or (labels[0] if labels else ""))
-        if mmprojs and not self.vars["mmproj"].get():
-            self._log_app(tr("Multimodal-Projektor gefunden, auswählbar unter „Chat & Server“: {mmprojs}", mmprojs=mmprojs[0]))
+        self.mmproj_paths = mmprojs
         self._on_model_change()
 
     def _on_model_change(self):
@@ -1376,6 +1419,7 @@ class App(tk.Tk):
             return
         self.model_info = info
         self._apply_model_rules(info)
+        self._suggest_projector(info)
         parts = [info["name"], info["arch"], info["size_label"]]
         if info["context"]:
             parts.append(tr("max. Kontext {context}", context=format_mib(info['context'])))
@@ -1511,8 +1555,23 @@ class App(tk.Tk):
         note = tr("\nNutzbar sind {usable} MiB.", usable=format_mib(est['usable'])) if est["usable"] is not None else ""
         return "\n".join(lines) + note + tr(" Die Rechnung berücksichtigt das Modell, die KV-Typen und die MoE-Felder.")
 
+    def _suggest_projector(self, info):
+        """Nennt einen Multimodal-Projektor aus dem Modell-Ordner, wenn er zu diesem Modell passt. Eingetragen wird er nicht, er kostet VRAM."""
+        if self.vars["mmproj"].get().strip():
+            return
+        fitting = [path for path in getattr(self, "mmproj_paths", []) if projector_fits(info, read_projector_info(path))]
+        if fitting:
+            self._log_app(tr("Bilder: Der Multimodal-Projektor {name} passt zu diesem Modell. Eintragen unter „Chat & Server“, er braucht zusätzlich etwa {mib} MiB VRAM.",
+                             name=fitting[0].name, mib=format_mib(fitting[0].stat().st_size / 1024 ** 2)))
+
     def _warnings(self):
         values, info, out = self.values(), self.model_info, []
+        projector = Path(values["mmproj"].strip()) if values["mmproj"].strip() else None
+        if projector and info and projector.is_file():
+            details = read_projector_info(projector)
+            if details and not projector_fits(info, details):
+                out.append(tr("Der Multimodal-Projektor {name} gehört zu {owner} und passt nicht zu diesem Modell. Bilder funktionieren damit nicht, "
+                              "der Start kann scheitern.", name=projector.name, owner=details.get("general.name") or details.get("general.basename") or "?"))
         if info.get("missing_parts"):
             out.append(tr("Von diesem Modell fehlen {missing_parts} Teildateien, der Start wird scheitern.", missing_parts=info['missing_parts']))
         if "draft-mtp" in values["spec_type"] and info and not info["mtp_layers"]:
@@ -1584,16 +1643,28 @@ class App(tk.Tk):
             self._style_gpu_banner(warn=True, show_button=False)
             return
 
+        def ask(argument, seconds):
+            return subprocess.run([str(exe), argument], capture_output=True, text=True, errors="replace", encoding="utf-8", timeout=seconds,
+                                  cwd=exe.parent, creationflags=subprocess.CREATE_NO_WINDOW)
+
         def work():
-            try:
-                run = subprocess.run([str(exe), "--list-devices"], capture_output=True, text=True, errors="replace",
-                                     encoding="utf-8", timeout=30, cwd=exe.parent,
-                                     creationflags=subprocess.CREATE_NO_WINDOW)
-                version = subprocess.run([str(exe), "--version"], capture_output=True, text=True, errors="replace",
-                                         encoding="utf-8", timeout=30, cwd=exe.parent,
-                                         creationflags=subprocess.CREATE_NO_WINDOW)
-            except (OSError, subprocess.TimeoutExpired) as err:
-                self.events.put(lambda message=tr("Geräteprüfung fehlgeschlagen: {err}", err=err): self.gpu_var.set(message))
+            error = None
+            for seconds in DEVICE_CHECK_SECONDS:  # Meist dauert es unter einer Sekunde. Hängt der Treiber kurz, hilft ein zweiter Versuch mit mehr Zeit.
+                try:
+                    run = ask("--list-devices", seconds)
+                    version = ask("--version", seconds)
+                    error = None
+                    break
+                except subprocess.TimeoutExpired:
+                    error = tr("Die Geräteprüfung hat nach {seconds} s nicht geantwortet.", seconds=seconds)
+                except OSError as err:
+                    error = tr("Geräteprüfung fehlgeschlagen: {err}", err=err)
+                    break
+            if error:
+                if self.vram_free is None:
+                    self.events.put(lambda message=error: self.gpu_var.set(message))
+                else:  # Die zuletzt gelesenen Werte bleiben, der Hinweis steht nur im Log.
+                    self.events.put(lambda message=error: self._log_app(message + tr(" Die zuletzt gelesenen Werte bleiben.")))
                 if self.sweep_pending:
                     self.events.put(self._begin_sweep)
                 if self.optimize_pending:
@@ -2203,6 +2274,17 @@ class App(tk.Tk):
         if self.optimize_restart:
             self.optimize_restart = False
             self.start_server()
+
+    def optimize_cores(self):
+        """Zahl der echten CPU-Kerne, einmal gelesen. Ohne Antwort von Windows gilt die Hälfte der logischen Kerne."""
+        if not getattr(self, "cpu_cores", 0):
+            try:
+                run = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", "(Get-CimInstance Win32_Processor | Measure-Object NumberOfCores -Sum).Sum"],
+                                     capture_output=True, text=True, timeout=30, creationflags=subprocess.CREATE_NO_WINDOW)
+                self.cpu_cores = int(run.stdout.strip())
+            except (OSError, ValueError, subprocess.TimeoutExpired):
+                self.cpu_cores = max(1, (os.cpu_count() or 2) // 2)
+        return self.cpu_cores
 
     def optimize_limit(self, values):
         return self._sweep_limit(values)

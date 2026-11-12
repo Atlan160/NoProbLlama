@@ -39,6 +39,7 @@ Start the wizard with the **Optimize model** button in the top bar. On the left,
 1. **Context size (`-c`):** You set the range to measure, for example from 8k to 260k. The program places up to 7 measuring points in it, one of them at the estimated VRAM limit. The range is checked against the model's maximum: if "To" is above it, the program only measures up to the maximum and tells you so. You then see the speed and choose the size you want to use. The largest size without a noticeable loss of speed is preselected.
 2. **Parameters that do not affect quality:** The program measures them one after the other and picks the best value each time:
    - `-ncmoe`, MoE models only: the highest answer speed, or the value that uses less VRAM if the speed is nearly the same. If the best value is at the edge of the series, the program keeps searching in that direction.
+   - `-t`, only when part of the model computes on the CPU (experts in RAM, or a model that does not fully fit in VRAM): automatic and several thread counts are measured. Automatic stays unless something is at least 2% faster.
    - `-ub`: the fastest prompt reading that does not hurt answer speed.
    - `--spec-type`: New and repeated text are measured. It picks the fastest on repeated text that costs new text at most 5%.
 3. **Parameters that can affect quality (optional):** `-ctk` and `-ctv`. Here you decide yourself what to measure and which value to use. If you do not want to risk any loss of quality, simply skip this part. The measurement only shows speed, not quality, so check the result with your own tasks.
@@ -101,6 +102,7 @@ In the chat window you can also:
 - set thinking in levels and expand the thoughts when you want to see them
 - attach text files, and images if the model can read them
 - edit messages, regenerate answers, set a system prompt and change the font size
+- **dictate** questions (off by default): the **Dictate** switch shows a record button. whisper.cpp transcribes the recording, and the text lands in the input field, where you can still change it before sending. Whisper only runs during transcription and uses no VRAM otherwise.
 - drag the input field larger for longer texts and scroll inside it
 - see the context in use as a colored bar with exact numbers
 - **compact** the chat: at the press of a button, the model summarizes the chat so far, and a hint shows you when this is worthwhile. The old history stays readable, and you can undo the step. A summary can lose or distort details, so it is worth taking a look at it.
@@ -121,8 +123,9 @@ The test texts of the measurements stay the same in every language, so that resu
 
 - **Windows.** Tested with Windows 11. The program uses Windows functions and therefore does not run on other systems.
 - **Python 3 with Tkinter.** Tested with Python 3.13.
-- **llama.cpp** as a [Windows release](https://github.com/ggml-org/llama.cpp/releases): with the CUDA runtime for NVIDIA cards, for AMD cards as a Vulkan build, for example. Tested with build 12054 (CUDA). Options can change in newer builds.
+- **llama.cpp** as a [Windows release](https://github.com/ggml-org/llama.cpp/releases): with the CUDA runtime for NVIDIA cards, for AMD cards as a Vulkan build, for example. Tested with builds 12054 and 12323 (CUDA). Options can change in newer builds.
 - **Models** in GGUF format.
+- **whisper.cpp** (optional) for dictation: the [Windows release](https://github.com/ggml-org/whisper.cpp/releases), the CUDA variant for NVIDIA cards, plus a model such as `ggml-large-v3-turbo-q8_0.bin`. The program expects `whisper-cli.exe` under `%LOCALAPPDATA%\Programs\whisper.cpp` and the model in the model folder under `whisper\`. Tested with build b5454.
 - **matplotlib** (optional) for the charts. Without the package, all measurements still run, and the values just appear in the table.
 
 ```bash
@@ -164,6 +167,7 @@ These files are listed in `.gitignore` and do not end up in the repository.
 | `llama_options.py` | `llama-server` options with rating and explanation |
 | `llama_plot.py` | Charts of the measurements |
 | `llama_lang.py` | Language selection and translation |
+| `llama_dictate.py` | Recording and transcription for dictation |
 | `lang/en.json` | English texts |
 
 ## License

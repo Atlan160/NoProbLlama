@@ -6,6 +6,7 @@ import mimetypes
 import os
 import queue
 import re
+import subprocess
 import threading
 import time
 import tkinter as tk
@@ -16,6 +17,7 @@ import webbrowser
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
+import llama_dictate
 from llama_lang import tr
 from llama_plot import format_number
 
@@ -636,6 +638,8 @@ class ChatWindow(tk.Toplevel):
         self.action_count = 0
         self.thought_state = {}
         self.choice_levels = []
+        self.recorder = llama_dictate.Recorder()
+        self.transcribing = False
         self._build()
         self._refresh_list()
         if self.store["chats"]:
@@ -645,6 +649,10 @@ class ChatWindow(tk.Toplevel):
         self._update_controls()
         self.protocol("WM_DELETE_WINDOW", self.destroy)
         self._pump_id = self.after(50, self._pump)
+
+    def destroy(self):
+        self.recorder.close()  # Eine laufende Aufnahme darf das Mikrofon nicht blockiert zurücklassen.
+        super().destroy()
 
     # ---------- Aufbau ----------
 
@@ -747,11 +755,96 @@ class ChatWindow(tk.Toplevel):
             widget.bind("<Control-MouseWheel>", lambda event: self.change_font_size(1 if event.delta > 0 else -1))
         for sequence, step in (("<Control-plus>", 1), ("<Control-equal>", 1), ("<Control-KP_Add>", 1), ("<Control-minus>", -1), ("<Control-KP_Subtract>", -1), ("<Control-Key-0>", 0)):
             self.bind(sequence, lambda _event, change=step: self.change_font_size(change))
+        self.dictate_var = tk.BooleanVar(value=False)  # Absichtlich bei jedem Start aus.
+        ttk.Checkbutton(bar, text=tr("Diktieren"), variable=self.dictate_var, command=self._toggle_dictation).pack(side="left", padx=(14, 0))
         self.send_button = ttk.Button(bar, text=tr("Senden"), command=self.toggle_send)
         self.send_button.pack(side="right")
-        ttk.Label(bar, text=tr("Umschalt+Enter: neue Zeile"), foreground=MUTED).pack(side="right", padx=(0, 10))
+        self.mic_button = ttk.Button(bar, text=tr("● Aufnehmen"), command=self.toggle_recording)
+        self.enter_hint = ttk.Label(bar, text=tr("Umschalt+Enter: neue Zeile"), foreground=MUTED)
+        self.enter_hint.pack(side="right", padx=(0, 10))
         self._fill_reasoning()
         self.input.focus_set()
+
+    # ---------- Diktieren ----------
+
+    def _whisper(self):
+        """Liefert (whisper-cli.exe, Modell) oder None. Die Pfade stehen in der Chat-Datei und lassen sich dort ändern."""
+        folder = self.store.get("whisper_dir") or str(llama_dictate.DEFAULT_WHISPER_DIR)
+        model = Path(self.store.get("whisper_model") or str(llama_dictate.DEFAULT_WHISPER_MODEL))
+        exe = llama_dictate.find_whisper(folder)
+        if exe is None or not model.is_file():
+            messagebox.showerror(tr("Diktieren"), tr(
+                "Für das Diktieren fehlt whisper.cpp.\n\nErwartet wird whisper-cli.exe in:\n{folder}\n\nund das Modell:\n{model}",
+                folder=folder, model=model), parent=self)
+            return None
+        return exe, model
+
+    def _toggle_dictation(self):
+        if self.dictate_var.get() and self._whisper() is None:
+            self.dictate_var.set(False)
+        if self.dictate_var.get():
+            self.enter_hint.pack_forget()  # Sonst reicht die Breite nicht für den Mikrofonknopf.
+            self.mic_button.pack(side="right", padx=(0, 6), after=self.send_button)
+            self.status_var.set(tr("Diktieren ist an. Ein Klick auf „Aufnehmen“ startet, ein zweiter beendet die Aufnahme."))
+        else:
+            if self.recorder.active:
+                self.recorder.close()
+            self.mic_button.configure(text=tr("● Aufnehmen"))
+            self.mic_button.pack_forget()
+            self.enter_hint.pack(side="right", padx=(0, 10), after=self.send_button)
+
+    def toggle_recording(self):
+        if self.transcribing:
+            return
+        if not self.recorder.active:
+            try:
+                self.recorder.start()
+            except RuntimeError as err:
+                messagebox.showerror(tr("Diktieren"), tr("Die Aufnahme ließ sich nicht starten: {err}", err=err), parent=self)
+                return
+            self.mic_button.configure(text=tr("■ Beenden"))
+            self.status_var.set(tr("Aufnahme läuft… Zum Beenden noch einmal klicken."))
+            return
+        whisper = self._whisper()
+        try:
+            audio = self.recorder.stop()
+        except RuntimeError as err:
+            self.mic_button.configure(text=tr("● Aufnehmen"))
+            self.status_var.set(tr("Die Aufnahme ließ sich nicht speichern: {err}", err=err))
+            return
+        self.mic_button.configure(text=tr("● Aufnehmen"))
+        if whisper is None:
+            audio.unlink(missing_ok=True)
+            return
+        self.transcribing = True
+        self.mic_button.configure(state="disabled")
+        self.status_var.set(tr("Wird erkannt…"))
+        threading.Thread(target=self._transcribe_worker, args=(whisper, audio), daemon=True).start()
+
+    def _transcribe_worker(self, whisper, audio):
+        try:
+            text, error = llama_dictate.transcribe(*whisper, audio), ""
+        except (RuntimeError, OSError, subprocess.TimeoutExpired) as err:
+            text, error = "", str(err)
+        finally:
+            audio.unlink(missing_ok=True)
+        self.events.put(("dictation", (text, error)))
+
+    def _on_dictation(self, text, error):
+        self.transcribing = False
+        if not self.winfo_exists():
+            return
+        self.mic_button.configure(state="normal")
+        if error:
+            self.status_var.set(tr("Erkennung fehlgeschlagen: {err}", err=error))
+            return
+        if not text:
+            self.status_var.set(tr("Es wurde nichts erkannt."))
+            return
+        before = self.input.get("insert-1c", "insert")
+        self.input.insert("insert", (" " if before and not before.isspace() else "") + text)
+        self.input.focus_set()
+        self.status_var.set(tr("Diktat eingefügt. Du kannst es vor dem Senden noch ändern."))
 
     def _remember_input_height(self):
         height = self.input_pane.winfo_height()
@@ -1266,6 +1359,9 @@ class ChatWindow(tk.Toplevel):
             self._refill(len(self.chat["messages"]) - 1)
 
     def _on_event(self, kind, value):
+        if kind == "dictation":
+            self._on_dictation(*value)
+            return
         if kind == "props":
             self.props = value
             self._fill_reasoning()
