@@ -532,6 +532,14 @@ _SAMPLING = [
 ]
 
 _CHAT = [
+    Opt("system_prompt_file", "", "System-Prompt (Datei)",
+        "Eine Text- oder Markdown-Datei, deren Inhalt jedem Gespräch vorangestellt wird, auch in WebUI und OpenCode. Ähnlich einer CLAUDE.md.",
+        "NoProbLlama baut den Text beim Start in die Chatvorlage des Modells ein, llama-server selbst hat dafür keine Option. Schickt ein Programm "
+        "selbst einen System-Prompt mit, etwa OpenCode, folgt dieser direkt dahinter. Änderungen an der Datei gelten nach einem Neustart des Servers.",
+        kind="file", default="keiner", speed=1, quality=3,
+        speed_note="Ein langer Text verlängert jeden Prompt und kostet beim ersten Einlesen etwas Zeit, danach hilft der Prompt-Cache.",
+        quality_note="Bestimmt, wie das Modell antwortet: Sprache, Ton, Länge, feste Regeln.",
+        tip="Kurz und klar halten. Für OpenCode zählt jedes Token doppelt, denn dessen eigener Prompt ist schon lang."),
     Opt("reasoning", "-rea", "Reasoning / Thinking",
         "on: bei schwierigen Aufgaben meist besser, aber deutlich länger. off: schnelle Antwort, oft weniger durchdacht.",
         "Schaltet den Denkprozess von Modellen mit Thinking ein oder aus.",

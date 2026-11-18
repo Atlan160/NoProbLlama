@@ -355,6 +355,10 @@ class OptimizeWindow(tk.Toplevel):
         self.range_note_var = tk.StringVar()
         self.range_note = ttk.Label(page, textvariable=self.range_note_var, justify="left", wraplength=800)
         self.range_note.pack(anchor="w", pady=(6, 0))
+        # Bei MoE-Modellen brachte der Schritt in den Messungen wenig, bei normalen Modellen mit CPU-Anteil eher. Deshalb dort vorgewählt.
+        self.threads_var = tk.BooleanVar(value=not self.info.get("experts"))
+        ttk.Checkbutton(page, text=tr("CPU-Threads mitmessen (lohnt sich vor allem bei normalen Modellen, die nicht ganz in den VRAM passen)"),
+                        variable=self.threads_var).pack(anchor="w", pady=(12, 0))
         self.start_button = ttk.Button(page, text=tr("Messung starten"), style="Big.TButton", command=self.start_range)
         self.start_button.pack(anchor="w", pady=(14, 0))
         self._update_range()
@@ -679,6 +683,8 @@ class OptimizeWindow(tk.Toplevel):
         if key == "ub":
             return with_current(UB_VALUES, self.current.get("ubatch", "").strip() or "512")
         if key == "spec":
+            if self.app.optimize_mtp_head(self.current):  # Mit einem MTP-Kopf als Draft-Modell geht nur draft-mtp, allein oder mit N-Gram.
+                return ["none", *SPEC_MTP_VALUES, "draft-mtp,ngram-simple"]
             values = list(SPEC_VALUES) + (list(SPEC_MTP_VALUES) if self.info.get("mtp_layers") else [])
             return with_current(values, self.current.get("spec_type", "").strip() or "none")
         if key == "ctk":
@@ -708,6 +714,11 @@ class OptimizeWindow(tk.Toplevel):
         if step["key"] == "gate":
             self.status_var.set(tr("Wähle, was gemessen werden soll, oder überspringe den Schritt."))
             self._show(step)
+            return
+        if step["key"] == "threads" and not self.threads_var.get():
+            step.update(done=True, skipped=True)
+            self.app._log_app(tr("Optimieren: -t übersprungen, der Schritt ist abgewählt."))
+            self._go_on(step)
             return
         if step["key"] == "threads" and not self._cpu_share():
             # Liegt alles im VRAM, rechnet die CPU nicht mit. Dann ändern Threads nichts am Tempo.

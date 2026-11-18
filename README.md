@@ -39,7 +39,7 @@ Start the wizard with the **Optimize model** button in the top bar. On the left,
 1. **Context size (`-c`):** You set the range to measure, for example from 8k to 260k. The program places up to 7 measuring points in it, one of them at the estimated VRAM limit. The range is checked against the model's maximum: if "To" is above it, the program only measures up to the maximum and tells you so. You then see the speed and choose the size you want to use. The largest size without a noticeable loss of speed is preselected.
 2. **Parameters that do not affect quality:** The program measures them one after the other and picks the best value each time:
    - `-ncmoe`, MoE models only: the highest answer speed, or the value that uses less VRAM if the speed is nearly the same. If the best value is at the edge of the series, the program keeps searching in that direction.
-   - `-t`, only when part of the model computes on the CPU (experts in RAM, or a model that does not fully fit in VRAM): automatic and several thread counts are measured. Automatic stays unless something is at least 2% faster.
+   - `-t`, only when part of the model computes on the CPU (experts in RAM, or a model that does not fully fit in VRAM): automatic and several thread counts are measured. Automatic stays unless something is at least 2% faster. The step can be deselected before starting, and it is deselected by default for MoE models, where it brings little.
    - `-ub`: the fastest prompt reading that does not hurt answer speed.
    - `--spec-type`: New and repeated text are measured. It picks the fastest on repeated text that costs new text at most 5%.
 3. **Parameters that can affect quality (optional):** `-ctk` and `-ctv`. Here you decide yourself what to measure and which value to use. If you do not want to risk any loss of quality, simply skip this part. The measurement only shows speed, not quality, so check the result with your own tasks.
@@ -106,6 +106,10 @@ In the chat window you can also:
 - drag the input field larger for longer texts and scroll inside it
 - see the context in use as a colored bar with exact numbers
 - **compact** the chat: at the press of a button, the model summarizes the chat so far, and a hint shows you when this is worthwhile. The old history stays readable, and you can undo the step. A summary can lose or distort details, so it is worth taking a look at it.
+
+### System prompt for all programs
+
+In the **Chat & Server** tab, you can enter a text or Markdown file under **System prompt (file)**, similar to a CLAUDE.md. Its content then comes before every conversation, in the chat window as well as in the web UI and in OpenCode. llama-server has no option of its own for this, so NoProbLlama builds the text into the model's chat template on start. If a program sends its own system prompt, it follows right after. Changes to the file apply after restarting the server.
 
 ### Connecting OpenCode
 

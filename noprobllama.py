@@ -11,6 +11,7 @@ import socket
 import struct
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import tkinter as tk
@@ -129,6 +130,18 @@ def mtp_is_worthwhile(info, free_mib, reserve_mib=FIT_RESERVE_MIB):
     return (free_mib - reserve_mib) / model_mib < MTP_MAX_GPU_SHARE
 
 
+def is_mtp_head(path):
+    """Ein MTP-Kopf als eigene Datei, etwa mtp-…-gemma-4….gguf mit der Architektur gemma4-assistant. Er rechnet nur mit draft-mtp."""
+    path = Path(path) if path else None
+    return bool(path) and path.is_file() and gguf_architecture(path).endswith("assistant")
+
+
+def spec_for_mtp_head(spec):
+    """draft-mtp kommt an die erste Stelle, weitere Typen bleiben dahinter. Ohne draft-mtp stürzt llama-server mit einem MTP-Kopf ab, auch bei none."""
+    parts = [part.strip() for part in spec.split(",") if part.strip() and part.strip() not in ("none", "auto")]
+    return ",".join(["draft-mtp"] + [part for part in parts if part != "draft-mtp"])
+
+
 def resolve_spec_type(value, info, free_mib=None, reserve_mib=FIT_RESERVE_MIB):
     """Ersetzt auto durch den Typ, der sich für dieses Modell in den Messungen bewährt hat."""
     if value.strip() != "auto":
@@ -157,9 +170,15 @@ def build_args(exe, model, values):
     args = [str(exe)]
     if model:
         args += ["-m", str(model)]
+    values = dict(values)
+    if is_mtp_head(values.get("draft_model", "").strip()):
+        if values.get("spec_type", "").strip() == "none":
+            values["draft_model"] = ""  # Ohne Spekulation hat der Kopf nichts zu tun und würde den Start nur abstürzen lassen.
+        else:
+            values["spec_type"] = spec_for_mtp_head(values.get("spec_type", ""))
     for opt in ALL_OPTS:
         val = values.get(opt.key, "").strip()
-        if not val or opt.key == "extra":
+        if not val or opt.key in ("extra", "system_prompt_file"):  # Der System-Prompt kommt über die Chatvorlage, siehe with_system_prompt.
             continue
         if opt.kind == "flag":
             args.append(opt.flag)
@@ -171,6 +190,59 @@ def build_args(exe, model, values):
     if extra:
         args += split_extra(extra)
     return args
+
+
+SYSTEM_TEMPLATE_PATH = Path(tempfile.gettempdir()) / "noprobllama_system_prompt.jinja"
+
+
+def read_system_prompt(path):
+    """Inhalt der System-Prompt-Datei ohne Leerraum am Rand, bei fehlender Datei leer."""
+    try:
+        return Path(path).read_text(encoding="utf-8-sig").strip()
+    except (OSError, ValueError):
+        return ""
+
+
+def inject_system_prompt(template, prompt):
+    """Stellt der Chatvorlage ein paar Zeilen voran: Der Text wird zur ersten Systemnachricht. Gibt es schon eine, folgt sie dahinter.
+    Getestet mit den Vorlagen von Hermes 3, Hermes 4 und Qwen3.6."""
+    literal = json.dumps(prompt, ensure_ascii=False)
+    head = ("{%- set np_system = " + literal + " -%}\n"
+            "{%- if messages and messages[0]['role'] == 'system' and messages[0]['content'] is string -%}\n"
+            "{%- set messages = [{'role': 'system', 'content': np_system + '\\n\\n' + messages[0]['content']}] + messages[1:] -%}\n"
+            "{%- else -%}\n"
+            "{%- set messages = [{'role': 'system', 'content': np_system}] + messages -%}\n"
+            "{%- endif -%}\n")
+    return head + template
+
+
+def system_template(values, info):
+    """Liefert (Vorlage, Grund). Ohne System-Prompt oder ohne passende Vorlage ist die Vorlage leer und der Grund nennt, warum."""
+    path = values.get("system_prompt_file", "").strip()
+    prompt = read_system_prompt(path) if path else ""
+    if not prompt:
+        return "", ""
+    if values.get("chat_template", "").strip():
+        return "", tr("System-Prompt: Er wirkt nicht zusammen mit einem eingebauten Chat-Template (Name). Lass das Feld leer oder nutze eine Template-Datei.")
+    base = values.get("chat_template_file", "").strip()
+    template = read_system_prompt(base) if base else (info or {}).get("chat_template", "")
+    if not template:
+        return "", tr("System-Prompt: Das Modell bringt keine Chatvorlage mit, deshalb lässt er sich nicht einbauen.")
+    return inject_system_prompt(template, prompt), ""
+
+
+def with_system_prompt(args, values, info, write=False):
+    """Hängt die erweiterte Chatvorlage an die Kommandozeile. write legt die Datei an, das passiert erst beim Start."""
+    template, _reason = system_template(values, info)
+    if not template:
+        return args
+    if write:
+        SYSTEM_TEMPLATE_PATH.write_text(template, encoding="utf-8")
+    cleaned = list(args)
+    if "--chat-template-file" in cleaned:  # Die eigene Vorlage steckt schon in der erweiterten.
+        index = cleaned.index("--chat-template-file")
+        del cleaned[index:index + 2]
+    return cleaned + ["--chat-template-file", str(SYSTEM_TEMPLATE_PATH)]
 
 
 def validate(values):
@@ -372,6 +444,7 @@ def read_gguf_info(path):
         "experts": expert_count or (1 if expert_layers else 0),
         "experts_used": whole_number(value("expert_used_count")) if expert_count else 0,
         "tools": isinstance(template, str) and "tools" in template,
+        "chat_template": template if isinstance(template, str) else "",
         "missing_parts": max(0, int(split.group(1)) - len(parts)) if split else 0,
         "embedding": whole_number(value("embedding_length")) or 0,
         "basename": meta.get("general.basename") if isinstance(meta.get("general.basename"), str) else "",
@@ -1497,11 +1570,11 @@ class App(tk.Tk):
     def exe_path(self):
         return Path(self.llama_dir.get()) / "llama-server.exe"
 
-    def current_args(self):
+    def current_args(self, write=False):
         values = self.values()
         values["spec_type"] = resolve_spec_type(values["spec_type"], self.model_info, self.vram_free,
                                                 fit_reserve_mib(values["fit_target"]))
-        return build_args(self.exe_path(), self.selected_model(), values)
+        return with_system_prompt(build_args(self.exe_path(), self.selected_model(), values), values, self.model_info, write)
 
     def _schedule_preview(self):
         if not self._preview_pending and hasattr(self, "preview"):
@@ -1588,6 +1661,12 @@ class App(tk.Tk):
         ctx = values["ctx_size"].strip()
         if ctx.isdigit() and info.get("context") and int(ctx) > info["context"]:
             out.append(tr("Kontextgröße liegt über dem Trainingskontext des Modells ({context}).", context=info['context']))
+        draft = values["draft_model"].strip()
+        if is_mtp_head(draft) and "draft-mtp" not in values["spec_type"] and values["spec_type"].strip() not in ("auto",):
+            out.append(tr("Das Draft-Modell ist ein MTP-Kopf. Er läuft nur mit draft-mtp, das ergänzt NoProbLlama beim Start automatisch. Bei none bleibt er weg."))
+        _template, reason = system_template(values, info)
+        if reason:
+            out.append(reason)
         host = values["host"].strip()
         if host and client_host(host) != host.split(",")[0].strip() and not values["api_key"].strip():
             out.append(tr("Der Server ist im Netzwerk erreichbar und hat keinen API-Key."))
@@ -1735,7 +1814,7 @@ class App(tk.Tk):
                 self._set_model_info(self.selected_model(), read_gguf_info(self.selected_model()))
             except (OSError, ValueError, struct.error, OverflowError, MemoryError) as err:
                 self._log_app(tr("Metadaten nicht lesbar: {err}", err=err))
-        args = self.current_args()
+        args = self.current_args(write=True)
         if not self.vars["port"].get().strip():
             args += ["--port", port]
         try:
@@ -2274,6 +2353,10 @@ class App(tk.Tk):
         if self.optimize_restart:
             self.optimize_restart = False
             self.start_server()
+
+    @staticmethod
+    def optimize_mtp_head(values):
+        return is_mtp_head(values.get("draft_model", "").strip())
 
     def optimize_cores(self):
         """Zahl der echten CPU-Kerne, einmal gelesen. Ohne Antwort von Windows gilt die Hälfte der logischen Kerne."""

@@ -953,6 +953,18 @@
   "whisper-cli ist mit Code {code} beendet.": "whisper-cli exited with code {code}.",
   "Misst, mit wie vielen CPU-Threads der Teil des Modells im RAM am schnellsten rechnet. Automatisch bleibt, solange nichts merklich schneller ist.": "Measures with how many CPU threads the part of the model in RAM computes fastest. Automatic stays unless something is noticeably faster.",
   "Wie viele CPU-Kerne mitrechnen. Zählt nur, wenn ein Teil des Modells im RAM liegt. Mehr ist nicht immer schneller.": "How many CPU cores take part. Only matters when part of the model is in RAM. More is not always faster.",
-  "Optimieren: -t übersprungen, das Modell rechnet ganz auf der Grafikkarte.": "Optimize: -t skipped, the model runs entirely on the graphics card."
+  "Optimieren: -t übersprungen, das Modell rechnet ganz auf der Grafikkarte.": "Optimize: -t skipped, the model runs entirely on the graphics card.",
+  "System-Prompt (Datei)": "System prompt (file)",
+  "Eine Text- oder Markdown-Datei, deren Inhalt jedem Gespräch vorangestellt wird, auch in WebUI und OpenCode. Ähnlich einer CLAUDE.md.": "A text or Markdown file whose content is put in front of every conversation, also in the web UI and OpenCode. Similar to a CLAUDE.md.",
+  "NoProbLlama baut den Text beim Start in die Chatvorlage des Modells ein, llama-server selbst hat dafür keine Option. Schickt ein Programm selbst einen System-Prompt mit, etwa OpenCode, folgt dieser direkt dahinter. Änderungen an der Datei gelten nach einem Neustart des Servers.": "NoProbLlama builds the text into the model's chat template on start, since llama-server itself has no option for it. If a program sends its own system prompt, such as OpenCode, it follows right after. Changes to the file apply after restarting the server.",
+  "keiner": "none",
+  "Ein langer Text verlängert jeden Prompt und kostet beim ersten Einlesen etwas Zeit, danach hilft der Prompt-Cache.": "A long text lengthens every prompt and costs some time on first reading, after that the prompt cache helps.",
+  "Bestimmt, wie das Modell antwortet: Sprache, Ton, Länge, feste Regeln.": "Determines how the model answers: language, tone, length, fixed rules.",
+  "Kurz und klar halten. Für OpenCode zählt jedes Token doppelt, denn dessen eigener Prompt ist schon lang.": "Keep it short and clear. For OpenCode every token counts double, because its own prompt is already long.",
+  "System-Prompt: Er wirkt nicht zusammen mit einem eingebauten Chat-Template (Name). Lass das Feld leer oder nutze eine Template-Datei.": "System prompt: It does not work together with a built-in chat template (name). Leave that field empty or use a template file.",
+  "System-Prompt: Das Modell bringt keine Chatvorlage mit, deshalb lässt er sich nicht einbauen.": "System prompt: The model has no chat template, so it cannot be built in.",
+  "Das Draft-Modell ist ein MTP-Kopf. Er läuft nur mit draft-mtp, das ergänzt NoProbLlama beim Start automatisch. Bei none bleibt er weg.": "The draft model is an MTP head. It only runs with draft-mtp, which NoProbLlama adds automatically on start. With none it is left out.",
+  "CPU-Threads mitmessen (lohnt sich vor allem bei normalen Modellen, die nicht ganz in den VRAM passen)": "Also measure CPU threads (mainly worthwhile for normal models that do not fully fit in VRAM)",
+  "Optimieren: -t übersprungen, der Schritt ist abgewählt.": "Optimize: -t skipped, the step is deselected."
  }
 }

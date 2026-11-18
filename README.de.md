@@ -37,7 +37,7 @@ Den Assistenten startest du mit dem Knopf **Modell optimieren** in der oberen Le
 1. **Kontextgröße (`-c`):** Du gibst an, in welchem Bereich gemessen wird, zum Beispiel von 8k bis 260k. Das Programm verteilt darin bis zu 7 Messpunkte, einer davon liegt an der geschätzten VRAM-Grenze. Der Bereich wird gegen das Maximum des Modells geprüft: Liegt „Bis“ darüber, misst das Programm nur bis zum Maximum und sagt dir das. Danach siehst du das Tempo und wählst die Größe, die du nutzen möchtest. Vorgewählt ist die größte ohne merklichen Tempoverlust.
 2. **Parameter ohne Einfluss auf die Qualität:** Das Programm misst sie der Reihe nach und wählt jeweils den besten Wert:
    - `-ncmoe`, nur bei MoE-Modellen: das höchste Antworttempo, bei fast gleichem Tempo der Wert mit weniger VRAM. Liegt das Beste am Rand der Messreihe, sucht das Programm in dieser Richtung weiter.
-   - `-t`, nur wenn ein Teil des Modells auf der CPU rechnet (Experten im RAM oder ein Modell, das nicht ganz in den VRAM passt): Gemessen werden automatisch und mehrere Thread-Zahlen. Automatisch bleibt, solange nichts mindestens 2 % schneller ist.
+   - `-t`, nur wenn ein Teil des Modells auf der CPU rechnet (Experten im RAM oder ein Modell, das nicht ganz in den VRAM passt): Gemessen werden automatisch und mehrere Thread-Zahlen. Automatisch bleibt, solange nichts mindestens 2 % schneller ist. Vor dem Start lässt sich der Schritt abwählen, bei MoE-Modellen ist er von vornherein abgewählt, weil er dort wenig bringt.
    - `-ub`: das schnellste Einlesen, ohne dass das Antworttempo leidet.
    - `--spec-type`: Gemessen werden neuer und wiederholter Text. Gewählt wird das Schnellste bei wiederholtem Text, das neuen Text höchstens 5 % kostet.
 3. **Parameter, die die Qualität beeinflussen können (freiwillig):** `-ctk` und `-ctv`. Hier entscheidest du selbst, was du misst und welchen Wert du nimmst. Willst du keine Qualitätseinbußen riskieren, überspringst du diesen Teil einfach. Die Messung zeigt nur das Tempo, nicht die Qualität. Prüfe das Ergebnis deshalb mit deinen eigenen Aufgaben.
@@ -104,6 +104,10 @@ Außerdem kannst du im Chatfenster:
 - das Eingabefeld für längere Texte größer ziehen und darin scrollen
 - den belegten Kontext als farbigen Balken mit genauen Zahlen ablesen
 - den Chat **kompaktieren:** Auf Knopfdruck fasst das Modell den bisherigen Chat zusammen, und ein Hinweis zeigt dir, wann sich das lohnt. Der alte Verlauf bleibt lesbar, und du kannst den Schritt rückgängig machen. Eine Zusammenfassung kann Details verlieren oder verfälschen, ein Blick hinein lohnt sich also.
+
+### System-Prompt für alle Programme
+
+Im Reiter **Chat & Server** kannst du unter **System-Prompt (Datei)** eine Text- oder Markdown-Datei angeben, ähnlich einer CLAUDE.md. Ihr Inhalt steht dann vor jedem Gespräch, im Chatfenster genauso wie in der WebUI und in OpenCode. llama-server hat dafür keine eigene Option. NoProbLlama baut den Text deshalb beim Start in die Chatvorlage des Modells ein. Schickt ein Programm selbst einen System-Prompt mit, folgt dieser direkt dahinter. Änderungen an der Datei gelten nach einem Neustart des Servers.
 
 ### OpenCode anbinden
 
