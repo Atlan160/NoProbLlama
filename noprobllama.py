@@ -358,6 +358,17 @@ def per_layer(value, layer):
     return whole_number(value)
 
 
+def sliding_layers(pattern, blocks):
+    """Welche Layer nur ein gleitendes Fenster speichern. Gemma 4 nennt es pro Layer (True = Fenster), Gemma 3 als Periode:
+    bei 6 haben fünf Layer ein Fenster, jeder sechste sieht den ganzen Kontext. Ohne Muster bleibt es unbekannt (None)."""
+    if isinstance(pattern, list) and pattern:
+        return {layer for layer, sliding in enumerate(pattern) if sliding}
+    period = whole_number(pattern)
+    if period and period > 1:
+        return {layer for layer in range(blocks) if (layer + 1) % period}
+    return None
+
+
 def kv_layer_units(meta, arch, blocks, attention_layers):
     """Liefert pro Layer mit Kontext (Layer, K-Werte, V-Werte) je Token. Fehlen Angaben, bleibt die Liste leer."""
     embedding = whole_number(model_value(meta, arch, "embedding_length"))
@@ -426,13 +437,16 @@ def read_gguf_info(path):
     next_layers = whole_number(value("nextn_predict_layers"))
     mtp_layers = next_layers if next_layers and highest_block + 1 >= blocks else 0
     expert_count = whole_number(value("expert_count"))
+    swa_layers = sliding_layers(value("attention.sliding_window_pattern"), blocks) if value("attention.sliding_window") else None
     template = meta.get("tokenizer.chat_template")
     expert_bytes = sum(expert_layers.values())
     units = kv_layer_units(meta, arch, blocks, attention_layers)
     return {
         "blocks": blocks,
         "kv_layers": units,
-        "kv_exact": bool(units) and value("attention.sliding_window") is None,
+        "kv_exact": bool(units) and (value("attention.sliding_window") is None or swa_layers is not None),
+        "swa_window": whole_number(value("attention.sliding_window")) if swa_layers else 0,
+        "swa_layers": sorted(swa_layers or ()),
         "expert_layers": len(expert_layers),
         "expert_mib": expert_bytes / 1024 ** 2,
         "always_mib": (total_bytes - expert_bytes) / 1024 ** 2,
@@ -539,15 +553,33 @@ def model_size_gib(path):
     return sum(p.stat().st_size for p in model_parts(path)) / 1024 ** 3
 
 
-def kv_estimate_mib(info, context, cache_k="", cache_v="", gpu_layers=None):
-    """Größe des KV-Caches im VRAM: Tokens x K- und V-Werte der Layer auf der GPU in ihrem Datentyp."""
+def kv_parts(info, cache_k="", cache_v="", gpu_layers=None, swa_full=False):
+    """KV-Bedarf je Token in MiB, getrennt nach Layern mit ganzem Kontext und Layern mit gleitendem Fenster."""
     if not info["kv_layers"]:
-        return KV_FALLBACK_MIB_PER_TOKEN * context  # Diese Angaben fehlen in der Datei, also nur ein grober Wert.
+        return KV_FALLBACK_MIB_PER_TOKEN, 0.0  # Diese Angaben fehlen in der Datei, also nur ein grober Wert.
     key_bits = KV_TYPE_BITS.get(cache_k, 16)
     value_bits = KV_TYPE_BITS.get(cache_v, 16)
-    bits = sum(key * key_bits + value * value_bits for layer, key, value in info["kv_layers"]
-               if gpu_layers is None or layer < gpu_layers)
-    return context * bits / 8 / 1024 ** 2
+    sliding = set() if swa_full else set(info.get("swa_layers") or ())
+    full, window = 0.0, 0.0
+    for layer, key, value in info["kv_layers"]:
+        if gpu_layers is not None and layer >= gpu_layers:
+            continue
+        mib = (key * key_bits + value * value_bits) / 8 / 1024 ** 2
+        if layer in sliding:
+            window += mib
+        else:
+            full += mib
+    return full, window
+
+
+def kv_estimate_mib(info, context, cache_k="", cache_v="", gpu_layers=None, ubatch=512, swa_full=False):
+    """Größe des KV-Caches im VRAM. Layer mit gleitendem Fenster halten höchstens Fenster plus einen Rechenblock, wie llama.cpp es anlegt."""
+    full, window = kv_parts(info, cache_k, cache_v, gpu_layers, swa_full)
+    return full * context + window * min(context, swa_tokens(info, ubatch))
+
+
+def swa_tokens(info, ubatch):
+    return (info.get("swa_window") or 0) + ubatch
 
 
 def estimate_vram(info, values, free_mib, spec_type=""):
@@ -577,12 +609,18 @@ def estimate_vram(info, values, free_mib, spec_type=""):
     kv_on_gpu = values.get("kv_offload", "").strip() != "aus"
     # Der Kontext liegt bei dem Gerät seines Layers. Layer auf der CPU belegen keinen VRAM.
     gpu_layers = int(ngl) if ngl.isdigit() else None
-    per_token = kv_estimate_mib(info, 1, cache_k, cache_v, gpu_layers) if kv_on_gpu else 0
+    ubatch = int(values.get("ubatch", "").strip()) if values.get("ubatch", "").strip().isdigit() else 512
+    swa_full = bool(values.get("swa_full", "").strip())
+    per_token, window_mib = kv_parts(info, cache_k, cache_v, gpu_layers, swa_full) if kv_on_gpu else (0.0, 0.0)
+    window_kv = window_mib * swa_tokens(info, ubatch)  # Ab dieser Größe wächst der Fenster-Teil nicht mehr.
     trained = info["context"] or 0
     max_context = None
-    if usable is not None and per_token:
-        room = usable - weights - buffer - extra
-        max_context = min(int(room / per_token) // 1024 * 1024, trained or 2 ** 31) if room > 0 else 0
+    if usable is not None and (per_token or window_mib):
+        room = usable - weights - buffer - extra - window_kv
+        if not per_token:
+            max_context = trained or 2 ** 31 if room > 0 else 0
+        else:
+            max_context = min(int(room / per_token) // 1024 * 1024, trained or 2 ** 31) if room > 0 else 0
     ctx = values.get("ctx_size", "").strip()
     explicit = ctx.isdigit() and int(ctx) > 0
     # Ohne festen Wert wählt --fit den Kontext selbst, höchstens bis zum Mindestkontext herab. Sonst gilt der Wert aus dem Modell.
@@ -594,7 +632,7 @@ def estimate_vram(info, values, free_mib, spec_type=""):
         context = max(max_context or 0, int(fit_ctx) if fit_ctx.isdigit() else FIT_MIN_CONTEXT)
     else:
         context = trained or 32768
-    kv = per_token * context
+    kv = per_token * context + window_mib * min(context, swa_tokens(info, ubatch))
     needed = weights + kv + buffer + extra
     over = 0 if usable is None else max(0, needed - usable)
     return {

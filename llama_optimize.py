@@ -20,7 +20,7 @@ SPEC_NEW_TEXT_TOLERANCE = 0.95  # So viel darf Spekulation bei neuem Text kosten
 TIE_TOLERANCE = 0.98
 MOE_STEP = 2
 MOE_MAX_POINTS = 9
-UB_VALUES = ("256", "512", "1024", "2048")
+UB_VALUES = ("256", "512", "1024", "2048", "4096")
 KV_VALUES = ("f16", "q8_0", "q4_0")
 SPEC_VALUES = ("none", "ngram-simple", "ngram-mod")
 SPEC_MTP_VALUES = ("draft-mtp", "draft-mtp,ngram-mod")
@@ -651,7 +651,8 @@ class OptimizeWindow(tk.Toplevel):
         elif key == "ub":
             settings["ubatch"] = str(value)
             batch = settings.get("batch", "").strip()
-            if batch.isdigit() and int(batch) < int(value):
+            # llama.cpp kappt -ub auf -b, und -b steht ohne Angabe auf 2048. Ohne Anheben wäre 4096 nur eine zweite Messung von 2048.
+            if (batch.isdigit() and int(batch) < int(value)) or (not batch and int(value) > 2048):
                 settings["batch"] = str(value)
         elif key == "spec":
             settings["spec_type"] = str(value)
