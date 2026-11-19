@@ -1,5 +1,6 @@
 """NoProbLlama: Tkinter-Oberfläche zum Starten von llama-server."""
 
+import functools
 import http.client
 import json
 import os
@@ -7,6 +8,7 @@ import queue
 import random
 import re
 import shlex
+import shutil
 import socket
 import struct
 import subprocess
@@ -23,6 +25,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 import llama_lang
+import llama_history
 import llama_plot
 from llama_lang import tr
 from llama_chat import ChatWindow, http_post_json
@@ -131,9 +134,25 @@ def mtp_is_worthwhile(info, free_mib, reserve_mib=FIT_RESERVE_MIB):
 
 
 def is_mtp_head(path):
-    """Ein MTP-Kopf als eigene Datei, etwa mtp-…-gemma-4….gguf mit der Architektur gemma4-assistant. Er rechnet nur mit draft-mtp."""
+    """Ein MTP-Kopf als eigene Datei. Er rechnet nur mit draft-mtp. Gemma 4 kennzeichnet ihn mit der Architektur gemma4-assistant,
+    Qwen3.8 nutzt dieselbe Architektur wie das Hauptmodell, die Datei enthält dann aber nur die MTP-Layer."""
     path = Path(path) if path else None
-    return bool(path) and path.is_file() and gguf_architecture(path).endswith("assistant")
+    if not path or not path.is_file():
+        return False
+    stat = path.stat()
+    return _mtp_head_cached(str(path), stat.st_mtime_ns, stat.st_size)
+
+
+@functools.lru_cache(maxsize=64)
+def _mtp_head_cached(path, _mtime, _size):
+    """Die Vorschau fragt bei jeder Änderung. Gelesen wird die Datei nur einmal, solange sie sich nicht ändert."""
+    path = Path(path)
+    if gguf_architecture(path).endswith("assistant"):
+        return True
+    try:
+        return read_gguf_info(path)["mtp_only"]
+    except (OSError, ValueError, struct.error, OverflowError, MemoryError):
+        return False
 
 
 def spec_for_mtp_head(spec):
@@ -402,6 +421,7 @@ def read_gguf_info(path):
     expert_layers = {}
     attention_layers = set()
     highest_block = -1
+    lowest_block = None
     has_mtp_tensors = False
     total_bytes = 0
     for part in parts:
@@ -421,6 +441,7 @@ def read_gguf_info(path):
             block = BLOCK_TENSOR.match(name)
             if block:
                 highest_block = max(highest_block, int(block.group(1)))
+                lowest_block = int(block.group(1)) if lowest_block is None else min(lowest_block, int(block.group(1)))
             if ATTENTION_TENSOR.match(name):
                 attention_layers.add(int(block.group(1)))
             if "mtp" in name.lower():
@@ -444,6 +465,8 @@ def read_gguf_info(path):
     return {
         "blocks": blocks,
         "kv_layers": units,
+        # Eine Datei, die nur die letzten MTP-Layer enthält, ist ein MTP-Kopf und kein vollständiges Modell.
+        "mtp_only": bool(next_layers) and lowest_block is not None and lowest_block >= blocks - next_layers,
         "kv_exact": bool(units) and (value("attention.sliding_window") is None or swa_layers is not None),
         "swa_window": whole_number(value("attention.sliding_window")) if swa_layers else 0,
         "swa_layers": sorted(swa_layers or ()),
@@ -1299,7 +1322,7 @@ class App(tk.Tk):
 
     def _build_sweep_tab(self, notebook):
         self.sweep_tab = tab = ttk.Frame(notebook, padding=8)
-        notebook.add(tab, text=tr("Kontext-Test"))
+        notebook.add(tab, text=tr("Optimierungs-Historie"))
 
         head = ttk.Frame(tab)
         head.pack(fill="x")
@@ -1321,18 +1344,31 @@ class App(tk.Tk):
 
         saved = ttk.Frame(tab)
         saved.pack(fill="x", pady=(6, 0))
-        ttk.Label(saved, text=tr("Gespeichert")).pack(side="left", padx=(0, 4))
+        ttk.Label(saved, text=tr("Gespeichert"), width=12).pack(side="left", padx=(0, 4))
         self.sweep_choice = tk.StringVar()
-        self.sweep_box = ttk.Combobox(saved, textvariable=self.sweep_choice, state="readonly", width=70)
+        self.sweep_box = ttk.Combobox(saved, textvariable=self.sweep_choice, state="readonly", width=80)
         self.sweep_box.pack(side="left")
         self.sweep_box.bind("<<ComboboxSelected>>", lambda _: self._show_saved_sweep())
         ttk.Button(saved, text=tr("Bild öffnen"), command=self.open_sweep_image).pack(side="left", padx=(6, 0))
         ttk.Button(saved, text=tr("Löschen"), command=self.delete_sweep).pack(side="left", padx=(6, 0))
+        # Bei einem Lauf von „Modell optimieren“: Auswahl des Schritts, die gewählten Werte und die Übernahme als Profil.
+        self.history_row = ttk.Frame(tab)
+        ttk.Label(self.history_row, text=tr("Schritt"), width=12).pack(side="left", padx=(0, 4))
+        self.history_step_var = tk.StringVar()
+        self.history_step_box = ttk.Combobox(self.history_row, textvariable=self.history_step_var, state="readonly", width=40)
+        self.history_step_box.pack(side="left")
+        self.history_step_box.bind("<<ComboboxSelected>>", lambda _: self._show_history_step())
+        ttk.Button(self.history_row, text=tr("Als Profil übernehmen"), command=self.history_to_profile).pack(side="left", padx=(6, 0))
+        self.history_summary = tk.StringVar()
+        ttk.Label(self.history_row, textvariable=self.history_summary, style="Hint.TLabel").pack(side="left", padx=(12, 0))
+        self.history = []
+        self.history_run = None
+        self.history_step = None
 
         body = ttk.Frame(tab)
         body.pack(fill="both", expand=True, pady=(6, 0))
-        columns = {"ctx": (tr("Kontext"), 62), "prompt_tps": (tr("Prompt Tok/s"), 90), "tps": ("Tok/s", 48), "vram": (tr("VRAM MiB"), 72),
-                   "state": (tr("Status"), 54)}
+        columns = {"ctx": (tr("Wert"), 130), "prompt_tps": (tr("Prompt Tok/s"), 90), "tps": ("Tok/s", 48), "repeat_tps": (tr("Wiederholt"), 72),
+                   "vram": (tr("VRAM MiB"), 72), "state": (tr("Status"), 54)}
         table = ttk.Frame(body)
         table.pack(side="right", fill="y", padx=(8, 0))
         self.sweep_table = ttk.Treeview(table, columns=list(columns), show="headings", height=6)
@@ -1346,6 +1382,7 @@ class App(tk.Tk):
         self.sweep_canvas = None
         self.sweep_axes = None
         self.sweep_shown = None
+        self.saved_row = saved
         self._refresh_saved_sweeps()
 
     def _on_tab_changed(self):
@@ -2536,6 +2573,7 @@ class App(tk.Tk):
         }
         self.sweep_cancel = threading.Event()
         self.sweep_shown = self.sweep_current
+        self._history_mode(None)
         self.sweep_bar.configure(value=0, maximum=len(contexts))
         self.sweep_button.configure(text=tr("Abbrechen"), state="normal")
         self.start_button.configure(state="disabled")
@@ -2716,39 +2754,114 @@ class App(tk.Tk):
         return tr("{time}   ·   {model}   ·   {count} Punkte{state}", time=sweep['time'], model=sweep['model'], count=len(sweep['points']), state=state)
 
     def _refresh_saved_sweeps(self):
-        saved = self._saved_sweeps()
-        labels = [self._sweep_label(sweep) for sweep in reversed(saved)]
-        self.sweep_box.configure(values=labels)
-        if self.sweep_shown is None and saved:
-            self.sweep_shown = saved[-1]
-        self.sweep_choice.set(self._sweep_label(self.sweep_shown) if self.sweep_shown in saved else "")
-        self._fill_sweep_table(self.sweep_shown)
+        """Liest die Historie neu ein und behält die Auswahl, solange es sie noch gibt."""
+        self.history = llama_history.entries(self.config_path.parent / SWEEP_FOLDER / "optimierung", self._saved_sweeps())
+        self.sweep_box.configure(values=[entry["label"] for entry in self.history])
+        entry = None
+        if self.history_run is not None:
+            entry = next((item for item in self.history if item["kind"] == "run" and item["folder"] == self.history_run["folder"]), None)
+        elif self.sweep_shown is not None:
+            entry = next((item for item in self.history if item.get("sweep") is self.sweep_shown), None)
+            if entry is None:  # Ein laufender Kontext-Test, der noch nicht in der Liste steht.
+                self._history_mode(None)
+                self._fill_sweep_table(self.sweep_shown)
+                return
+        if entry is None and self.history:
+            entry = self.history[0]
+        self._select_history(entry)
 
     def _show_saved_sweep(self):
         index = self.sweep_box.current()
-        saved = self._saved_sweeps()
-        if 0 <= index < len(saved):
-            self.sweep_shown = saved[len(saved) - 1 - index]
-            self._fill_sweep_table(self.sweep_shown)
+        if 0 <= index < len(self.history):
+            self._select_history(self.history[index])
             self._draw_sweep()
+
+    def _history_mode(self, run):
+        """Bei einem Lauf erscheint die Zeile mit den Schritten, bei einem einzelnen Kontext-Test nicht."""
+        self.history_run = run
+        if run:
+            self.history_row.pack(fill="x", pady=(6, 0), after=self.saved_row)
+        else:
+            self.history_row.pack_forget()
+            self.history_step = None
+
+    def _select_history(self, entry):
+        if entry is None:
+            self.sweep_choice.set("")
+            self._history_mode(None)
+            self.sweep_shown = None
+            self._fill_sweep_table(None)
+            return
+        self.sweep_choice.set(entry["label"])
+        if entry["kind"] == "sweep":
+            self._history_mode(None)
+            self.sweep_shown = entry["sweep"]
+            self._fill_sweep_table(self.sweep_shown)
+            return
+        previous = self.history_step.get("key") if self.history_run and self.history_run["folder"] == entry["folder"] and self.history_step else None
+        self.sweep_shown = None
+        self._history_mode(entry)
+        steps = entry["steps"]
+        self.history_step_box.configure(values=[llama_history.step_label(step) for step in steps])
+        # Neu ausgewählt zeigt der Lauf sein Ergebnis, beim Auffrischen bleibt der gewählte Schritt.
+        step = next((item for item in steps if item.get("key") == previous), None) or next(
+            (item for item in reversed(steps) if item.get("key") in llama_history.SWEEP_KEYS), steps[-1])
+        self.history_summary.set(llama_history.run_summary(entry))
+        self._show_history_step(step)
+
+    def _show_history_step(self, step=None):
+        run = self.history_run
+        if not run:
+            return
+        if step is None:
+            index = self.history_step_box.current()
+            if not 0 <= index < len(run["steps"]):
+                return
+            step = run["steps"][index]
+        self.history_step = step
+        self.history_step_var.set(llama_history.step_label(step))
+        self._fill_sweep_table({"points": step["points"]})
+        self._draw_sweep()
 
     def _fill_sweep_table(self, sweep):
         self.sweep_table.delete(*self.sweep_table.get_children())
         for point in (sweep or {}).get("points", []):
             self.sweep_table.insert("", "end", values=(
-                point.get("ctx", point.get("requested", "")), point.get("prompt_tps", ""), point.get("tps", ""),
-                point.get("vram") or "", point.get("state", "")))
+                point.get("label") or point.get("ctx", point.get("requested", "")), point.get("prompt_tps", ""), point.get("tps", ""),
+                point.get("repeat_tps") or "", point.get("vram") or "", point.get("state", "")))
 
     def open_sweep_image(self):
+        if self.history_run:  # Bei einem Lauf das Diagramm des gezeigten Schritts, sonst den Ordner des Laufs.
+            image = Path((self.history_step or {}).get("image", ""))
+            os.startfile(image if image.is_file() else self.history_run["folder"])
+            return
         image = Path((self.sweep_shown or {}).get("image", ""))
         if self.sweep_shown:  # Neu zeichnen, damit auch ältere Tests im aktuellen Stil erscheinen.
             self._save_sweep_image(self.sweep_shown)
         if not self.sweep_shown or not image.is_file():
-            messagebox.showinfo(tr("Kontext-Test"), tr("Für diese Auswahl gibt es noch kein Bild."))
+            messagebox.showinfo(tr("Optimierungs-Historie"), tr("Für diese Auswahl gibt es noch kein Bild."))
             return
         os.startfile(image)
 
     def delete_sweep(self):
+        run = self.history_run
+        if run:
+            if self.optimize_window is not None and Path(self.optimize_window.folder) == Path(run["folder"]):
+                messagebox.showinfo(tr("Optimierungs-Historie"), tr("Dieser Lauf ist gerade im Fenster „Modell optimieren“ geöffnet."))
+                return
+            if not messagebox.askokcancel(tr("Lauf löschen"), tr("{label}\n\nAlle Messwerte und Diagramme dieses Laufs werden gelöscht.", label=run["label"])):
+                return
+            for sweep in [item for item in self._saved_sweeps() if Path(item.get("image", "")).parent == Path(run["folder"])]:
+                self._saved_sweeps().remove(sweep)
+            try:
+                shutil.rmtree(run["folder"])
+            except OSError as err:
+                self._log_app(tr("Lauf nicht gelöscht: {err}", err=err))
+            self._save_config()
+            self._history_mode(None)
+            self._refresh_saved_sweeps()
+            self._draw_sweep()
+            return
         sweep = self.sweep_shown
         if not sweep or sweep is self.sweep_current or sweep not in self._saved_sweeps():
             return
@@ -2763,6 +2876,21 @@ class App(tk.Tk):
         self.sweep_shown = None
         self._refresh_saved_sweeps()
         self._draw_sweep()
+
+    def history_to_profile(self):
+        """Übernimmt die gewählten Werte eines Laufs als Profil. Die Modelldatei wird im Modell-Ordner gesucht."""
+        run = self.history_run
+        if not run:
+            return
+        stem = run["report"].get("model", "")
+        model = next((path for path in Path(self.models_dir.get()).rglob(f"{stem}.gguf")), None) if stem else None
+        if model is None:
+            messagebox.showerror(tr("Als Profil übernehmen"), tr("Die Modelldatei {name}.gguf liegt nicht im Modell-Ordner.", name=stem))
+            return
+        if self.profile_exists(stem) and not messagebox.askokcancel(tr("Profil"), tr("Das Profil „{name}“ gibt es schon. Überschreiben?", name=stem)):
+            return
+        self.save_optimized_profile(stem, dict(run["report"].get("current") or {}), model)
+        self._log_app(tr("Profil „{name}“ aus dem Lauf vom {time} übernommen.", name=stem, time=run["stamp"]))
 
     def _ensure_sweep_canvas(self):
         if self.sweep_canvas or self.sweep_figure is False:
@@ -2785,8 +2913,16 @@ class App(tk.Tk):
     def _draw_sweep(self):
         if not self.sweep_canvas:
             return
-        sweep = self.sweep_shown or {"points": [], "model": tr("Noch kein Test gespeichert"), "time": "", "complete": True}
-        self.sweep_axes = llama_plot.draw_sweep(self.sweep_figure, sweep, compact=True)
+        run, step = self.history_run, self.history_step
+        if run and step:
+            if step.get("key") in llama_history.SWEEP_KEYS:
+                self.sweep_axes = llama_plot.draw_sweep(self.sweep_figure, llama_history.step_sweep(run, step), compact=True)
+            else:  # Parameterschritte zeigen Balken oder Linien wie im Fenster „Modell optimieren“. Ohne Kontextachse gibt es keine Hover-Werte.
+                llama_plot.draw_param(self.sweep_figure, step, compact=True)
+                self.sweep_axes = None
+        else:
+            sweep = self.sweep_shown or {"points": [], "model": tr("Noch kein Test gespeichert"), "time": "", "complete": True}
+            self.sweep_axes = llama_plot.draw_sweep(self.sweep_figure, sweep, compact=True)
         self.sweep_hover = None
         self.sweep_canvas.draw_idle()
 

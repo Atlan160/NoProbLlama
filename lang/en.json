@@ -965,6 +965,19 @@
   "System-Prompt: Das Modell bringt keine Chatvorlage mit, deshalb lässt er sich nicht einbauen.": "System prompt: The model has no chat template, so it cannot be built in.",
   "Das Draft-Modell ist ein MTP-Kopf. Er läuft nur mit draft-mtp, das ergänzt NoProbLlama beim Start automatisch. Bei none bleibt er weg.": "The draft model is an MTP head. It only runs with draft-mtp, which NoProbLlama adds automatically on start. With none it is left out.",
   "CPU-Threads mitmessen (lohnt sich vor allem bei normalen Modellen, die nicht ganz in den VRAM passen)": "Also measure CPU threads (mainly worthwhile for normal models that do not fully fit in VRAM)",
-  "Optimieren: -t übersprungen, der Schritt ist abgewählt.": "Optimize: -t skipped, the step is deselected."
+  "Optimieren: -t übersprungen, der Schritt ist abgewählt.": "Optimize: -t skipped, the step is deselected.",
+  "Optimierungs-Historie": "Optimization history",
+  "Schritt": "Step",
+  "Als Profil übernehmen": "Use as profile",
+  "Lauf löschen": "Delete run",
+  "{label}\n\nAlle Messwerte und Diagramme dieses Laufs werden gelöscht.": "{label}\n\nAll measurements and charts of this run will be deleted.",
+  "Lauf nicht gelöscht: {err}": "Run not deleted: {err}",
+  "Dieser Lauf ist gerade im Fenster „Modell optimieren“ geöffnet.": "This run is currently open in the “Optimize model” window.",
+  "Die Modelldatei {name}.gguf liegt nicht im Modell-Ordner.": "The model file {name}.gguf is not in the model folder.",
+  "Profil „{name}“ aus dem Lauf vom {time} übernommen.": "Profile “{name}” taken over from the run of {time}.",
+  "{time}   ·   {model}   ·   Modell optimieren, {count} Schritte": "{time}   ·   {model}   ·   Optimize model, {count} steps",
+  "{time}   ·   {model}   ·   Modell optimieren, 1 Schritt": "{time}   ·   {model}   ·   Optimize model, 1 step",
+  "{time}   ·   {model}   ·   Kontext-Test, {count} Punkte{state}": "{time}   ·   {model}   ·   Context test, {count} points{state}",
+  "Gewählt: {values}": "Chosen: {values}"
  }
 }
