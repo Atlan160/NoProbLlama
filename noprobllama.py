@@ -184,12 +184,18 @@ def split_extra(text):
     return list(lexer)
 
 
+def projector_path(values):
+    """Der eingetragene Multimodal-Projektor, leer wenn keiner eingetragen oder er per Häkchen abgeschaltet ist."""
+    return "" if values.get("mmproj_off", "").strip() else values.get("mmproj", "").strip()
+
+
 def build_args(exe, model, values):
     """Baut die Kommandozeile. Leere Felder werden weggelassen."""
     args = [str(exe)]
     if model:
         args += ["-m", str(model)]
     values = dict(values)
+    values["mmproj"] = projector_path(values)  # Abgeschaltet: Datei bleibt eingetragen, wird aber nicht geladen.
     if is_mtp_head(values.get("draft_model", "").strip()):
         if values.get("spec_type", "").strip() == "none":
             values["draft_model"] = ""  # Ohne Spekulation hat der Kopf nichts zu tun und würde den Start nur abstürzen lassen.
@@ -273,7 +279,7 @@ def validate(values):
             continue
         if opt.pattern and not re.fullmatch(opt.pattern, val):
             errors.append(tr("{label} ({flag}): ungültiger Wert „{val}“", label=opt.label, flag=opt.flag, val=val))
-        if opt.kind == "file" and not Path(val).is_file():
+        if opt.kind == "file" and not Path(val).is_file() and not (opt.key == "mmproj" and values.get("mmproj_off", "").strip()):
             errors.append(tr("{label} ({flag}): Datei nicht gefunden", label=opt.label, flag=opt.flag))
     try:
         split_extra(values.get("extra", ""))
@@ -621,9 +627,9 @@ def estimate_vram(info, values, free_mib, spec_type=""):
     elif ngl.isdigit() and info["blocks"] and int(ngl) < info["blocks"]:
         weights = total * int(ngl) / info["blocks"]
     extra = MTP_OVERHEAD_MIB if "draft-mtp" in spec_type else 0
-    for key in ("mmproj", "draft_model"):
+    for file in (projector_path(values), values.get("draft_model", "").strip()):
         try:
-            extra += Path(values.get(key, "").strip()).stat().st_size / 1024 ** 2 if values.get(key, "").strip() else 0
+            extra += Path(file).stat().st_size / 1024 ** 2 if file else 0
         except OSError:
             pass
     fit_off = values.get("fit", "").strip() == "off"
@@ -1496,8 +1502,13 @@ class App(tk.Tk):
             return ttk.Combobox(parent, textvariable=var, values=opt.values, width=18)
         if opt.kind == "file":
             frame = ttk.Frame(parent)
-            ttk.Entry(frame, textvariable=var, width=16).pack(side="left", fill="x", expand=True)
+            entry = ttk.Entry(frame, textvariable=var, width=16)
+            entry.pack(side="left", fill="x", expand=True)
             ttk.Button(frame, text="…", width=3, command=lambda: self._pick_file(var)).pack(side="left", padx=(2, 0))
+            if opt.key == "mmproj":  # Abschalten, ohne den Pfad zu verlieren: spart VRAM, solange keine Bilder gebraucht werden.
+                off = self.vars["mmproj_off"] = tk.StringVar()
+                off.trace_add("write", lambda *_: (entry.state(["disabled"] if off.get() else ["!disabled"]), self._schedule_preview()))
+                ttk.Checkbutton(frame, text=tr("nicht laden"), variable=off, onvalue="1", offvalue="").pack(side="left", padx=(6, 0))
             return frame
         return ttk.Entry(parent, textvariable=var, width=20)
 
@@ -1705,7 +1716,7 @@ class App(tk.Tk):
 
     def _suggest_projector(self, info):
         """Nennt einen Multimodal-Projektor aus dem Modell-Ordner, wenn er zu diesem Modell passt. Eingetragen wird er nicht, er kostet VRAM."""
-        if self.vars["mmproj"].get().strip():
+        if self.vars["mmproj"].get().strip():  # Eingetragen, ob an oder abgeschaltet: dann ist die Wahl schon getroffen.
             return
         fitting = [path for path in getattr(self, "mmproj_paths", []) if projector_fits(info, read_projector_info(path))]
         if fitting:
@@ -1714,7 +1725,7 @@ class App(tk.Tk):
 
     def _warnings(self):
         values, info, out = self.values(), self.model_info, []
-        projector = Path(values["mmproj"].strip()) if values["mmproj"].strip() else None
+        projector = Path(projector_path(values)) if projector_path(values) else None
         if projector and info and projector.is_file():
             details = read_projector_info(projector)
             if details and not projector_fits(info, details):

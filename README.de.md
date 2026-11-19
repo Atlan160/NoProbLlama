@@ -98,7 +98,7 @@ Außerdem kannst du im Chatfenster:
 - Antworten mitlesen, während sie entstehen, mit Markdown, Tabellen und Codeblöcken zum Kopieren
 - Formeln lesen (als Unicode-Text, nicht als echten Formelsatz)
 - das Nachdenken in Stufen einstellen und die Gedanken bei Bedarf aufklappen
-- Textdateien anhängen und Bilder, wenn das Modell sie lesen kann
+- Textdateien anhängen und Bilder, wenn das Modell sie lesen kann. Dafür braucht es einen Multimodal-Projektor (`--mmproj`). Brauchst du gerade keine Bilder, setze dort das Häkchen „nicht laden“: Die Datei bleibt eingetragen, und der VRAM bleibt frei.
 - Nachrichten bearbeiten, Antworten neu erzeugen, einen System-Prompt setzen und die Schriftgröße ändern
 - Fragen **diktieren** (standardmäßig aus): Mit dem Schalter **Diktieren** erscheint ein Knopf zum Aufnehmen. whisper.cpp schreibt die Aufnahme ab, und der Text landet im Eingabefeld, wo du ihn vor dem Senden noch ändern kannst. Whisper läuft nur während der Erkennung und belegt sonst keinen VRAM.
 - das Eingabefeld für längere Texte größer ziehen und darin scrollen

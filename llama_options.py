@@ -623,7 +623,7 @@ _CHAT = [
         memory_note="Gibt VRAM und RAM im Leerlauf frei."),
     Opt("mmproj", "-mm", "Multimodal-Projektor",
         "Nur für Bildeingabe. Reine Textarbeit wird dadurch nicht schneller oder besser.",
-        "mmproj-Datei, die zum Modell passen muss.",
+        "mmproj-Datei, die zum Modell passen muss. Mit „nicht laden“ bleibt sie eingetragen, belegt aber keinen VRAM.",
         kind="file", memory=2,
         memory_note="Belegt zusätzlich VRAM, grob seine Dateigröße."),
     Opt("warmup", "--warmup", "Warmup beim Start",

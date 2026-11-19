@@ -1194,7 +1194,7 @@ class ChatWindow(tk.Toplevel):
             try:
                 attachment = read_attachment(path)
                 if attachment["kind"] == "image" and self.url and not self._supports_images():
-                    raise ValueError(tr("Dieses Modell liest keine Bilder. Dafür braucht der Server ein passendes Modell mit --mmproj."))
+                    raise ValueError(tr("Dieses Modell liest keine Bilder. Dafür braucht der Server einen passenden Multimodal-Projektor (--mmproj), eingetragen und nicht auf „nicht laden“."))
                 self.pending.append(attachment)
             except (OSError, ValueError) as err:
                 messagebox.showerror(tr("Datei nicht angehängt"), str(err), parent=self)

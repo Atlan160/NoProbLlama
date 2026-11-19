@@ -100,7 +100,7 @@ In the chat window you can also:
 - read answers as they are written, with Markdown, tables and code blocks you can copy
 - read formulas (as Unicode text, not as real typesetting)
 - set thinking in levels and expand the thoughts when you want to see them
-- attach text files, and images if the model can read them
+- attach text files, and images if the model can read them. That needs a multimodal projector (`--mmproj`). If you don't need images right now, tick “don't load” there: the file stays filled in and the VRAM stays free.
 - edit messages, regenerate answers, set a system prompt and change the font size
 - **dictate** questions (off by default): the **Dictate** switch shows a record button. whisper.cpp transcribes the recording, and the text lands in the input field, where you can still change it before sending. Whisper only runs during transcription and uses no VRAM otherwise.
 - drag the input field larger for longer texts and scroll inside it
